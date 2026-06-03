@@ -198,12 +198,23 @@ jobs:
       - name: Coagula CLI funnels the crashloop log
         shell: pwsh
         run: |
-          $in = Get-Content -Raw tests/fixtures/crashloop.log
-          $inChars = $in.Length
-          $out = $in | coagula --query "why connection refused" --profile passthrough --budget 2000 --keep 5
-          $outChars = $out.Length
+          # PowerShell auto-splits native-command stdout into an array of
+          # lines, so we re-join to measure char count (not line count) and
+          # search content with -match (not array -notmatch which returns
+          # matching elements, not a boolean).
+          $inText = Get-Content -Raw tests/fixtures/crashloop.log
+          $inChars = $inText.Length
+          $outArr = $inText | coagula --query "why connection refused" --profile passthrough --budget 2000 --keep 5
+          $outText = ($outArr | Out-String).Trim()
+          $outChars = $outText.Length
           $reduction = 1 - ($outChars / $inChars)
-          Write-Host "Input: $inChars chars, Output: $outChars chars, Reduction: $reduction"
+          Write-Host "Input: $inChars chars, Output: $outChars chars, Reduction: $($reduction.ToString('P1'))"
           if ($reduction -lt 0.99) { Write-Host "FAIL: expected >=99% reduction"; exit 1 }
-          if ($out -notmatch 'connection refused') { Write-Host "FAIL: signal lost"; exit 1 }
+          if (-not ($outText -match 'connection refused')) {
+            Write-Host "FAIL: signal lost"
+            Write-Host "---OUTPUT START---"
+            Write-Host $outText
+            Write-Host "---OUTPUT END---"
+            exit 1
+          }
           Write-Host "PASS: CLI funnel works end-to-end on Windows"
