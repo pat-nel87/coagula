@@ -238,15 +238,12 @@ jobs:
             } catch { return $false }
           }
           # Fabricate a bash shim that returns Linux for `uname -s`.
+          # cmd shim ignores its args and echoes "Linux" — that's enough since
+          # Test-SafeBash only invokes `bash -c 'uname -s'` and reads stdout.
           $fakeDir = Join-Path $env:RUNNER_TEMP "fake-wsl-$(Get-Random)"
           New-Item -ItemType Directory -Force -Path $fakeDir | Out-Null
           $fake = Join-Path $fakeDir "fake-bash.cmd"
-          # cmd shim: echo "Linux" then exit. Argv parsing is good enough since
-          # Test-SafeBash only invokes `bash -c 'uname -s'`.
-          @'
-@echo off
-echo Linux
-'@ | Set-Content -LiteralPath $fake
+          Set-Content -LiteralPath $fake -Value "@echo off`r`necho Linux"
           if (Test-SafeBash $fake) {
             Write-Host "FAIL: fake-WSL bash classified safe — would have deferred wrongly"
             exit 1
