@@ -293,12 +293,36 @@ Verify with `/mcp show` inside an interactive `copilot` session.
 
 #### Troubleshooting
 
-- **Hook doesn't fire.** `tail -f ~/.copilot/logs/*.log` and look for
-  `preToolUse` / `postToolUse` lines. Common causes: `jq` not installed,
-  `coagula` not on PATH for the shell `copilot` launched (use absolute
-  paths in `coagula.json` if your shell rc isn't sourced for non-interactive
-  bash).
-- **"Permission denied" on the hook script.** `chmod +x ~/.copilot/hooks-bin/*.sh`.
+**First step on any problem (Windows or macOS/Linux): run the smoke-test
+diagnostic.** It walks 10 checks and tells you exactly what's missing and
+how to fix it:
+
+```powershell
+# Windows:
+.\integrations\windows-smoke.ps1
+
+# Skip the live `copilot` session (if you don't want to burn a premium request):
+.\integrations\windows-smoke.ps1 -SkipLiveSession
+```
+
+There's no Linux/macOS equivalent script yet — the bash hooks have been
+exercised end-to-end against real `copilot` sessions on macOS, and `pytest`
+covers the Python paths. If you hit an issue there, walk the same checks
+manually: `coagula --help`, `jq --version`, `cat ~/.copilot/hooks/coagula.json`,
+`tail -f ~/.copilot/logs/*.log` during a session.
+
+Common specifics:
+
+- **Hook doesn't fire.** Check `%USERPROFILE%\.copilot\logs\` (Windows) or
+  `~/.copilot/logs/` (macOS/Linux) for `preToolUse` / `postToolUse` lines.
+  Common causes: `jq` not installed (only for the bash path), `coagula` not
+  on PATH for the shell `copilot` launched (use absolute paths in
+  `coagula.json` if your shell rc isn't sourced for non-interactive bash).
+- **"Permission denied" on the hook script.** macOS/Linux: `chmod +x ~/.copilot/hooks-bin/*.sh`.
+  Windows: usually an ExecutionPolicy issue — the installer writes
+  `powershell -ExecutionPolicy Bypass` which should sidestep this, but
+  corporate AppLocker policies can override. Workaround: ask IT to allowlist
+  the hook script path, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 - **Funneled output is too aggressive / signal lost.** Raise
   `COAGULA_BUDGET` and `COAGULA_KEEP`, or set `COAGULA_THRESHOLD=10000` so
   only truly enormous outputs get intercepted.
@@ -306,10 +330,24 @@ Verify with `/mcp show` inside an interactive `copilot` session.
   policy. Workaround: use the cross-host MCP server path (step 6) — it's
   LLM-invoked, not policy-restricted.
 - **Tool repeatedly re-reads the spill file.** Copilot CLI persists original
-  output at `/tmp/copilot-tool-output-*.txt`; the model may go fetch the
-  raw blob if it doesn't trust the funneled version. Tune
-  `COAGULA_QUERY` to be specific so the funneled result actually contains
-  the signal the model is after.
+  output at `/tmp/copilot-tool-output-*.txt` (or `%TEMP%\copilot-tool-output-*.txt`
+  on Windows); the model may go fetch the raw blob if it doesn't trust the
+  funneled version. Tune `COAGULA_QUERY` to be specific so the funneled
+  result actually contains the signal the model is after.
+
+#### What's verified end-to-end (honest status)
+
+- **macOS:** Library, CLI, MCP server, Ollama, bash hooks in live Copilot
+  CLI session — all verified locally.
+- **Windows:** Library + CLI + PS hooks parse + installer dry-run +
+  synthetic-stdin hook tests + CLI-on-Windows fixture reduction — all
+  verified in CI on the Windows-latest runner. A live `copilot` session
+  with hooks installed has NOT been verified end-to-end (no Windows box
+  in the build env). The smoke script above closes that gap when run on
+  a real Windows machine.
+- **Azure OpenAI:** Mocked tests pass; live calls against a real tenant
+  not verified (set `RUN_AZURE_TESTS=1` + the four `AZURE_OPENAI_*` env
+  vars to exercise locally).
 
 ### Optional: route the funnel's embed + summarize tier through a cheap model
 
