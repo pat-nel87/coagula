@@ -16,6 +16,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Refresh PATH from the user + machine registry into the current process,
+# so a `pip install` done in the same terminal is visible to Get-Command
+# below. Otherwise the sanity-check section false-warns "coagula not on
+# PATH" even when it's already installed. Windows-only; no-op elsewhere.
+function Update-PathFromRegistry {
+    if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { return }
+    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $combined = @($machinePath, $userPath) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd(';') }
+    $env:Path = ($combined -join ';')
+}
+Update-PathFromRegistry
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SrcPs = Join-Path $ScriptDir 'coagula-bash-hook.ps1'
 $SrcSh = Join-Path $ScriptDir 'coagula-bash-hook.sh'

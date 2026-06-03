@@ -32,10 +32,28 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
-# ---- Auto-detect: defer to bash if available ------------------------------
+# ---- Auto-detect: defer to bash if it's a Windows-path-aware bash ---------
+# `Get-Command bash` on Windows can resolve to the WSL launcher
+# (C:\Windows\System32\bash.exe). WSL runs Linux which cannot read
+# C:\... paths — calling our .sh sibling through it silently fails.
+# Defer only when bash reports a Windows-native flavor (MINGW / CYGWIN /
+# MSYS). On macOS/Linux any bash is fine.
+function Test-SafeBash {
+    param([string]$BashPath)
+    if (-not $BashPath) { return $false }
+    # Hard reject the WSL launcher path even before invoking it.
+    if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+    $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+    if (-not $onWindows) { return $true }
+    try {
+        $u = & $BashPath -c 'uname -s' 2>$null
+        return ($u -match '^(MINGW|CYGWIN|MSYS)')
+    } catch { return $false }
+}
+
 $siblingSh = Join-Path $PSScriptRoot 'coagula-post-tool-hook.sh'
 $bashExe   = Get-Command bash -ErrorAction SilentlyContinue
-if ($bashExe -and (Test-Path $siblingSh)) {
+if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
     # Read stdin, forward to the bash impl, return its stdout verbatim.
     $stdin = [Console]::In.ReadToEnd()
     $stdin | & $bashExe.Source $siblingSh

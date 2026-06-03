@@ -185,6 +185,124 @@ jobs:
           }
           Write-Host "PASS: postToolUse reduced $($big.Length) -> $($cleaned.Length) chars ($($reduction * 100)%)"
 
+  # Regression coverage for the two Windows bugs caught in field testing:
+  # (1) WSL bash false-defer — hooks deferred to WSL launcher which can't
+  #     read C:\... paths, silently failing on Windows boxes without Git Bash.
+  # (2) Installer PATH false-warning — install.ps1 warned "coagula not on PATH"
+  #     before refreshing PATH from the registry post-pip-install.
+  windows-bugfix-regression:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Test-SafeBash accepts Git Bash (uname -> MINGW)
+        shell: pwsh
+        run: |
+          function Test-SafeBash {
+            param([string]$BashPath)
+            if (-not $BashPath) { return $false }
+            if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+            $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+            if (-not $onWindows) { return $true }
+            try {
+              $u = & $BashPath -c 'uname -s' 2>$null
+              return ($u -match '^(MINGW|CYGWIN|MSYS)')
+            } catch { return $false }
+          }
+          # Windows runners ship with Git Bash at C:\Program Files\Git\bin\bash.exe.
+          $bash = Get-Command bash -ErrorAction SilentlyContinue
+          if (-not $bash) { Write-Host "FAIL: no bash on runner — unexpected"; exit 1 }
+          Write-Host "Resolved bash: $($bash.Source)"
+          $u = & $bash.Source -c 'uname -s'
+          Write-Host "uname -s reports: $u"
+          if (-not (Test-SafeBash $bash.Source)) {
+            Write-Host "FAIL: Git Bash on runner classified as unsafe"; exit 1
+          }
+          Write-Host "PASS: Git Bash correctly classified safe"
+
+      - name: Test-SafeBash rejects fake WSL bash (uname -> Linux)
+        shell: pwsh
+        run: |
+          function Test-SafeBash {
+            param([string]$BashPath)
+            if (-not $BashPath) { return $false }
+            if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+            $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+            if (-not $onWindows) { return $true }
+            try {
+              $u = & $BashPath -c 'uname -s' 2>$null
+              return ($u -match '^(MINGW|CYGWIN|MSYS)')
+            } catch { return $false }
+          }
+          # Fabricate a bash shim that returns Linux for `uname -s`.
+          $fakeDir = Join-Path $env:RUNNER_TEMP "fake-wsl-$(Get-Random)"
+          New-Item -ItemType Directory -Force -Path $fakeDir | Out-Null
+          $fake = Join-Path $fakeDir "fake-bash.cmd"
+          # cmd shim: echo "Linux" then exit. Argv parsing is good enough since
+          # Test-SafeBash only invokes `bash -c 'uname -s'`.
+          @'
+@echo off
+echo Linux
+'@ | Set-Content -LiteralPath $fake
+          if (Test-SafeBash $fake) {
+            Write-Host "FAIL: fake-WSL bash classified safe — would have deferred wrongly"
+            exit 1
+          }
+          Write-Host "PASS: fake-WSL bash correctly classified unsafe"
+
+      - name: Test-SafeBash rejects the WSL launcher path even before invocation
+        shell: pwsh
+        run: |
+          function Test-SafeBash {
+            param([string]$BashPath)
+            if (-not $BashPath) { return $false }
+            if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+            return $true  # short-circuit the rest for this isolated test
+          }
+          $launcher = 'C:\Windows\System32\bash.exe'
+          if (Test-SafeBash $launcher) {
+            Write-Host "FAIL: WSL launcher path not rejected"
+            exit 1
+          }
+          Write-Host "PASS: WSL launcher path rejected by path pattern"
+
+      - name: install.ps1 PATH refresh surfaces freshly-installed coagula
+        shell: pwsh
+        run: |
+          # Reproduce the field bug: install coagula, then deliberately
+          # poison the current process PATH so coagula.exe isn't visible.
+          # install.ps1's Update-PathFromRegistry must restore it from the
+          # registry before the sanity-check warnings fire.
+          pip install -e .
+          # Capture where coagula landed so we can compare PATH later.
+          $coagulaExe = (Get-Command coagula -ErrorAction Stop).Source
+          Write-Host "coagula installed at: $coagulaExe"
+          $coagulaDir = Split-Path -Parent $coagulaExe
+          # Strip coagula's dir from $env:Path to simulate "fresh shell"
+          # state where the install ran moments before this script.
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -ne $coagulaDir }) -join ';'
+          if (Get-Command coagula -ErrorAction SilentlyContinue) {
+            Write-Host "SETUP-FAIL: coagula still visible after PATH poisoning"
+            exit 1
+          }
+          Write-Host "PATH poisoned; coagula now invisible to Get-Command."
+          # Dry-run install.ps1 in a sandboxed USERPROFILE and capture warnings.
+          $sandbox = Join-Path $env:RUNNER_TEMP "coagula-pathfix-$(Get-Random)"
+          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+          $env:USERPROFILE = $sandbox
+          $output = & .\integrations\copilot-cli\install.ps1 2>&1 | Out-String
+          Write-Host "--- installer output ---"
+          Write-Host $output
+          Write-Host "------------------------"
+          if ($output -match "'coagula' not on PATH") {
+            Write-Host "FAIL: installer false-warned despite PATH refresh"
+            exit 1
+          }
+          Write-Host "PASS: installer did not false-warn after PATH refresh"
+
   # End-to-end: real wheel install, real CLI invocation, real fixture data.
   cli-e2e-windows:
     runs-on: windows-latest

@@ -26,6 +26,17 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Refresh PATH from registry so a `pip install coagula` done in the
+# current terminal session is actually visible to the checks below.
+function Update-PathFromRegistry {
+    if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { return }
+    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $combined = @($machinePath, $userPath) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd(';') }
+    $env:Path = ($combined -join ';')
+}
+Update-PathFromRegistry
+
 $script:passed = 0
 $script:failed = 0
 $script:warned = 0

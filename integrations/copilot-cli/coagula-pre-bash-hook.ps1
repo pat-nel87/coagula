@@ -11,9 +11,23 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+# Defer to bash only when it can actually read Windows paths. WSL bash
+# (uname -s == Linux) silently fails on C:\... siblings — skip it.
+function Test-SafeBash {
+    param([string]$BashPath)
+    if (-not $BashPath) { return $false }
+    if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+    $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+    if (-not $onWindows) { return $true }
+    try {
+        $u = & $BashPath -c 'uname -s' 2>$null
+        return ($u -match '^(MINGW|CYGWIN|MSYS)')
+    } catch { return $false }
+}
+
 $siblingSh = Join-Path $PSScriptRoot 'coagula-pre-bash-hook.sh'
 $bashExe   = Get-Command bash -ErrorAction SilentlyContinue
-if ($bashExe -and (Test-Path $siblingSh)) {
+if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
     $stdin = [Console]::In.ReadToEnd()
     $stdin | & $bashExe.Source $siblingSh
     exit $LASTEXITCODE

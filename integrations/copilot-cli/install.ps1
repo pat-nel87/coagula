@@ -19,6 +19,20 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# Refresh PATH from the user + machine registry into the current process.
+# Without this, `pip install coagula` in the same shell session leaves
+# the freshly-installed `coagula.exe` invisible to Get-Command until you
+# open a new terminal — which triggers a misleading "not on PATH"
+# warning below. Windows-only; no-op elsewhere.
+function Update-PathFromRegistry {
+    if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { return }
+    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $combined = @($machinePath, $userPath) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd(';') }
+    $env:Path = ($combined -join ';')
+}
+Update-PathFromRegistry
+
 # Sanity: required source files.
 $preBash = Join-Path $ScriptDir 'coagula-pre-bash-hook.sh'
 $prePs   = Join-Path $ScriptDir 'coagula-pre-bash-hook.ps1'
