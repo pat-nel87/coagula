@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from . import Chunk, default_funnel
+from .config import PROFILES, get_profile
 
 _LOG_PREFIX_RE = re.compile(
     r"^\s*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|^\s*\[?\d{2}:\d{2}:\d{2}"
@@ -68,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=int, default=2000, help="Max tokens (default 2000).")
     p.add_argument("--keep", type=int, default=5, help="Top-K kept by relevance (default 5).")
     p.add_argument(
+        "--profile",
+        default="passthrough",
+        choices=sorted(PROFILES.keys()),
+        help="Per-tool JSON pruning denylist (default: passthrough — no pruning).",
+    )
+    p.add_argument(
         "--report",
         action="store_true",
         help="Print the per-stage token/chunk table to stderr.",
@@ -79,7 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     text = Path(args.path).read_text() if args.path else sys.stdin.read()
     chunks = chunk_text(text)
-    funnel = default_funnel(max_tokens=args.budget, keep=args.keep)
+    funnel = default_funnel(
+        max_tokens=args.budget,
+        keep=args.keep,
+        json_denylist=get_profile(args.profile),
+    )
     out = funnel.run(chunks, args.query, args.budget)
     assembled = next((c for c in out if c.source == "assembled"), None)
     if assembled is None:

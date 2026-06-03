@@ -86,6 +86,24 @@ In your user `settings.json`:
 (Replace the key with whatever your Copilot version expects; the SDK transport
 is stdio either way.)
 
+### Automatic interception in Claude Code (the closest thing to a true interceptor)
+
+Claude Code's `PreToolUse` hook can rewrite Bash commands *before* they run.
+The `integrations/claude-code/` hook auto-pipes noisy commands (`kubectl`,
+`psql`, `az`, `gcloud`, `journalctl`, etc.) through `coagula` so the model
+never sees the raw output:
+
+```bash
+./integrations/claude-code/install.sh
+# or, to also patch ~/.claude/settings.json automatically:
+./integrations/claude-code/install.sh --auto-update-settings
+```
+
+See [integrations/claude-code/README.md](./integrations/claude-code/README.md)
+for the full docs, env knobs, and limitations. No equivalent host-level hook
+exists for VSCode Copilot or Copilot CLI today — use the `coagula-mcp`
+server or instruction-level guidance there.
+
 ### Optional: enable Ollama for better ranking + abstractive summarization
 
 ```bash
