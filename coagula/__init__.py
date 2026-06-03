@@ -1,20 +1,39 @@
 """coagula — local context manicuring funnel.
 
-See SPEC.md for the full contract. M1 ships the data model and a zero-stage
-runnable Funnel; the real stages and `default_funnel` land in M2/M3.
+See SPEC.md for the full contract. M3 ships the seven-stage default funnel,
+runnable end-to-end with stdlib-only dependencies. The ``embedder`` and
+``llm`` hooks accept optional callables; the funnel works without them.
 """
 
 from __future__ import annotations
 
 from .stage import Chunk, Funnel, Stage, StageResult, Tier
+from .stages import (
+    Assemble,
+    Budget,
+    Dedup,
+    Normalize,
+    Prune,
+    Relevance,
+    Summarize,
+    chunk_id,
+)
 from .tokens import count_tokens
 
 __all__ = [
+    "Assemble",
+    "Budget",
     "Chunk",
+    "Dedup",
     "Funnel",
+    "Normalize",
+    "Prune",
+    "Relevance",
     "Stage",
     "StageResult",
+    "Summarize",
     "Tier",
+    "chunk_id",
     "count_tokens",
     "default_funnel",
 ]
@@ -25,10 +44,26 @@ def default_funnel(
     keep: int = 5,
     embedder=None,
     llm=None,
+    json_denylist: set[str] | None = None,
+    max_array: int = 10,
 ) -> Funnel:
-    """Build the fixed seven-stage default pipeline.
+    """Build the fixed seven-stage default pipeline (SPEC §7).
 
-    Stub until M3. Will return a `Funnel` with stages in the order:
-    normalize → dedup → prune → relevance → summarize → budget → assemble.
+    Order: normalize → dedup → prune → relevance → summarize → budget → assemble.
+
+    Stage order is fixed and deterministic. The ``embedder`` / ``llm`` hooks
+    are optional — if absent, Relevance falls back to TF-IDF and Summarize
+    falls back to extractive selection. ``json_denylist`` defaults to empty
+    (per-tool denylists are an M5 concern).
     """
-    raise NotImplementedError("default_funnel lands in M3 — see SPEC §7")
+    return Funnel(
+        [
+            Normalize(),
+            Dedup(),
+            Prune(denylist=json_denylist or set(), max_array=max_array),
+            Relevance(keep=keep, embedder=embedder),
+            Summarize(llm=llm),
+            Budget(max_tokens=max_tokens),
+            Assemble(),
+        ]
+    )

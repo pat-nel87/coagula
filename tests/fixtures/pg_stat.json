@@ -1,0 +1,20 @@
+{
+  "pg_stat_activity": [
+    {"pid": 12001, "datname": "payments", "state": "active", "query_start": "2026-01-15T12:00:01Z", "backend_start": "2026-01-15T11:59:59Z", "query": "SELECT * FROM transactions WHERE id = $1"},
+    {"pid": 12002, "datname": "payments", "state": "idle", "query_start": "2026-01-15T12:00:00Z", "backend_start": "2026-01-15T11:59:58Z", "query": "BEGIN"},
+    {"pid": 12003, "datname": "payments", "state": "active", "query_start": "2026-01-15T11:59:50Z", "backend_start": "2026-01-15T11:59:45Z", "query": "UPDATE accounts SET balance = balance - $1 WHERE id = $2"}
+  ],
+  "pg_stat_database": {
+    "datname": "payments",
+    "numbackends": 47,
+    "xact_commit": 9384721,
+    "xact_rollback": 412,
+    "blks_read": 281749,
+    "blks_hit": 41872938,
+    "tup_returned": 8472193,
+    "tup_fetched": 1928374,
+    "deadlocks": 0,
+    "temp_files": 23,
+    "temp_bytes": 47218394
+  }
+}

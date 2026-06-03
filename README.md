@@ -10,17 +10,20 @@ Postgres stats, Azure ARM responses) but works on any context.
 
 ## Status
 
-**M1 — core scaffold only.** Data model and zero-stage funnel runner exist.
-Real stages and the CLI land in M2/M3. See `SPEC.md` for the full contract and
-`/Users/patnel87/.claude/plans/sharded-sauteeing-axolotl.md` for the build
-plan.
+**M3 — full default funnel runnable end-to-end on stdlib only.** Seven stages
+wired, CLI works, e2e test on the `noisy_mixed` fixture hits ≥99% token
+reduction with the FATAL signal preserved. Deferred follow-ups: Ollama hooks
+(M4), MCP adapter + deferred store (M5), sidecar/packaging polish (M6). See
+`SPEC.md` for the full contract.
 
-## Quick start (once M3 lands)
+## Quick start
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"
+pytest
+python demo.py
 python -m coagula.cli --query "why is the pod crashlooping" --report \
-  < tests/fixtures/noisy_mixed.txt
+  --budget 800 --keep 4 tests/fixtures/noisy_mixed.txt
 ```
 
 ## Design
