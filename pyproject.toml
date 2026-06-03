@@ -15,10 +15,13 @@ dependencies = []
 [project.optional-dependencies]
 tiktoken = ["tiktoken>=0.7"]
 ollama = []   # documentation only — coagula.models.ollama uses stdlib urllib
-dev = ["pytest>=8"]
+mcp = ["mcp>=1.0,<2.0"]
+all = ["mcp>=1.0,<2.0", "tiktoken>=0.7"]
+dev = ["pytest>=8", "mcp>=1.0,<2.0"]
 
 [project.scripts]
 coagula = "coagula.cli:main"
+coagula-mcp = "coagula.mcp.server:main"
 
 [tool.setuptools.packages.find]
 include = ["coagula*"]
