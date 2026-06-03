@@ -67,13 +67,13 @@ if ([string]::IsNullOrEmpty($command)) { Out-Passthrough }
 if ($command -match '\|\s?coagula(\s|$)') { Out-Passthrough }
 
 # Match against built-in noisy command list.
-$defaultPattern = '^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan))\s'
+$defaultPattern = '^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan))\s'
 $extraPattern   = $env:COAGULA_NOISY_PATTERNS
 
 $stripped = $command.TrimStart()
 $matched = $false
-if ($stripped -cmatch $defaultPattern) { $matched = $true }
-elseif ($extraPattern -and $stripped -cmatch ('^(' + $extraPattern + ')\s')) { $matched = $true }
+if ($stripped -imatch $defaultPattern) { $matched = $true }
+elseif ($extraPattern -and $stripped -imatch ('^(' + $extraPattern + ')\s')) { $matched = $true }
 
 if (-not $matched) { Out-Passthrough }
 

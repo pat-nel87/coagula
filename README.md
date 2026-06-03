@@ -14,7 +14,7 @@ Postgres stats, Azure ARM responses) but works on any context.
 
 ## Status
 
-**v0.3.2** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
+**v0.3.3** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
 MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
 1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
 interception via PowerShell/Bash host hooks). Optional cheap-inference
@@ -27,10 +27,10 @@ with the FATAL signal always preserved.
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.2/coagula-0.3.2-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.3/coagula-0.3.3-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.2/coagula-0.3.2-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.3/coagula-0.3.3-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula

@@ -145,6 +145,54 @@ jobs:
             Write-Host "FAIL: rewrite missing k8s profile: $($obj.modifiedArgs.command)"; exit 1
           }
           Write-Host "PASS: preToolUse kubectl rewrite ($($obj.modifiedArgs.command))"
+      - name: preToolUse — curl should be rewritten
+        shell: pwsh
+        run: |
+          $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"curl -s https://api.example.com/big.json\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          if (-not $obj.modifiedArgs.command -or $obj.modifiedArgs.command -notmatch 'coagula --query') {
+            Write-Host "FAIL: curl not rewritten: $($obj | ConvertTo-Json -Compress)"; exit 1
+          }
+          Write-Host "PASS: curl rewritten"
+      - name: preToolUse — Invoke-WebRequest (PS cmdlet) should be rewritten
+        shell: pwsh
+        run: |
+          # PowerShell cmdlets like Invoke-WebRequest are common when MCP
+          # endpoints are reached over HTTPS from a locked-down corp box.
+          # Case-insensitive matching also catches inVoke-webREQUEST etc.
+          $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"Invoke-WebRequest https://mcp.internal/big -UseBasicParsing\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          if (-not $obj.modifiedArgs.command -or $obj.modifiedArgs.command -notmatch 'coagula --query') {
+            Write-Host "FAIL: Invoke-WebRequest not rewritten: $($obj | ConvertTo-Json -Compress)"; exit 1
+          }
+          Write-Host "PASS: Invoke-WebRequest rewritten"
+      - name: preToolUse — case-insensitive (INVOKE-RESTMETHOD) should be rewritten
+        shell: pwsh
+        run: |
+          $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"INVOKE-RESTMETHOD https://api.example.com/v2\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          if (-not $obj.modifiedArgs.command -or $obj.modifiedArgs.command -notmatch 'coagula --query') {
+            Write-Host "FAIL: INVOKE-RESTMETHOD not rewritten (case-insensitive broken): $($obj | ConvertTo-Json -Compress)"; exit 1
+          }
+          Write-Host "PASS: case-insensitive match works"
       - name: preToolUse — echo should pass through
         shell: pwsh
         run: |

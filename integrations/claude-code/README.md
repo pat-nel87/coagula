@@ -26,17 +26,26 @@ it understands the transformation happened.
 
 ## What gets intercepted
 
-Built-in noisy-command list:
+Built-in noisy-command list (case-insensitive):
 
 ```
 kubectl  oc  helm
 psql     mysql  sqlite3
 az       gcloud  aws
+curl     wget
+Invoke-WebRequest  Invoke-RestMethod  iwr  irm
 gh api   journalctl  dmesg
 ps       netstat  lsof  iptables  systemctl
 docker (ps|inspect|logs)
 terraform (show|plan)
 ```
+
+The HTTP-fetching commands (`curl`, `wget`, `Invoke-WebRequest`,
+`Invoke-RestMethod`, `iwr`, `irm`) catch API/MCP-over-HTTP traffic the
+model issues from a shell — a common pattern on locked-down corporate
+boxes where MCP servers are reached over HTTP. Tiny responses (health
+checks) are still wrapped but the lossless stages pass them through
+unchanged.
 
 Profile auto-selection from the leading command:
 

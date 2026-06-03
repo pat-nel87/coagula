@@ -7,7 +7,7 @@ replace any tool's output.
 
 | Hook | Event | What it does | Why |
 |---|---|---|---|
-| `coagula-pre-bash-hook.sh` | `preToolUse` | Rewrites noisy `bash` commands (`kubectl`, `psql`, `az`, `gcloud`, etc.) to pipe through `coagula` before they run | Trim noise at the source — smaller pipe-through cost |
+| `coagula-pre-bash-hook.sh` | `preToolUse` | Rewrites noisy `bash` commands (`kubectl`, `psql`, `az`, `gcloud`, `curl`, `Invoke-WebRequest`, etc.) to pipe through `coagula` before they run | Trim noise at the source — smaller pipe-through cost |
 | `coagula-post-tool-hook.sh` | `postToolUse` | Catches the result of *any* tool above N tokens (`bash`, `view`, MCP tools, …) and replaces it with a coagula-funneled version via `modifiedResult` | True universal interception — the model never sees the raw noise |
 
 Use both together. The pre hook gives a tight loop for known noise sources;

@@ -57,14 +57,14 @@ if printf '%s' "$command" | grep -qE '\| ?coagula( |$)'; then
 fi
 
 # Built-in noisy-command pattern (matches the Claude Code hook).
-default_pattern='^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan)) '
+default_pattern='^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan)) '
 extra_pattern="${COAGULA_NOISY_PATTERNS:-}"
 
 stripped=$(printf '%s' "$command" | sed 's/^[[:space:]]*//')
 matched=0
-if printf '%s' "$stripped" | grep -qE "$default_pattern"; then
+if printf '%s' "$stripped" | grep -qiE "$default_pattern"; then
   matched=1
-elif [[ -n "$extra_pattern" ]] && printf '%s' "$stripped" | grep -qE "^($extra_pattern) "; then
+elif [[ -n "$extra_pattern" ]] && printf '%s' "$stripped" | grep -qiE "^($extra_pattern) "; then
   matched=1
 fi
 (( matched == 0 )) && { echo "$allow_passthrough"; exit 0; }

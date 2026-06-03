@@ -53,7 +53,7 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 # Built-in list of commands whose output is typically token-bloat.
 # Match the command at the start of a pipeline, plus the common subcommand
 # forms (`kubectl get ... -o json`, `az resource show`, etc.).
-default_pattern='^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|gh api|journalctl|dmesg|ps|netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan)) '
+default_pattern='^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan)) '
 
 # User-supplied extra patterns.
 extra_pattern="${COAGULA_NOISY_PATTERNS:-}"
@@ -66,9 +66,9 @@ fi
 # Match? Strip leading whitespace for the regex test.
 stripped=$(printf '%s' "$command" | sed 's/^[[:space:]]*//')
 matched=0
-if printf '%s' "$stripped" | grep -qE "$default_pattern"; then
+if printf '%s' "$stripped" | grep -qiE "$default_pattern"; then
   matched=1
-elif [[ -n "$extra_pattern" ]] && printf '%s' "$stripped" | grep -qE "^($extra_pattern) "; then
+elif [[ -n "$extra_pattern" ]] && printf '%s' "$stripped" | grep -qiE "^($extra_pattern) "; then
   matched=1
 fi
 
