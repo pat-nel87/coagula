@@ -17,33 +17,47 @@ Postgres stats, Azure ARM responses) but works on any context.
 GitHub flipped Copilot to **usage-based billing on June 1, 2026**. Every
 Copilot Chat / Copilot CLI premium request now draws from a monthly
 AI Credit budget at the underlying model's API rate — input + output +
-cached tokens, all metered.
+cached tokens, all metered. Heavy diagnostic-tool sessions ("investigate
+this incident", "explain this cluster's state") burn proportionally more.
 
-Diagnostic-tool sessions are where this hurts. A single agent task
-involving `kubectl describe`, `journalctl`, `az resource show`, or any
-typical multi-tool investigation can burn 50–200k input tokens before
-the model emits an answer. That's a meaningful chunk of a $10/mo Pro
-budget per session.
+coagula trims the *input* side of those sessions before the tokens are
+billed. **What gets trimmed, and by how much, depends on payload shape:**
 
-What coagula does to the bill, for a moderately-heavy Copilot CLI user
-running ~50 noisy-tool sessions per month:
+| Payload shape (measured on test fixtures) | Reduction | Why |
+|---|---|---|
+| Crashloop / journalctl-style logs with repeated templates | ~99% | Dedup collapses N identical-modulo-timestamp lines to 1 + `(xN)` |
+| Bloated kubectl JSON (`-o json` of a healthy pod) | ~70% | Prune strips `managedFields`, `resourceVersion`, `annotations`, etc. |
+| Structured Postgres / Azure ARM JSON | ~50-80% | Profile-specific denylist + array truncation |
+| Mixed prose / code output (e.g. `cargo build`) | ~10-30% | Limited dedup opportunity; Relevance + Summarize would help if a query is set |
+| Pure code, well-structured text | ~5-15% | coagula barely helps — there's not much to compress |
 
-| Session shape | Tokens/session | Cost @ frontier-model rates | Monthly cost |
-|---|---|---|---|
-| Vanilla (no coagula) | ~200k | ~$0.50 | **~$25** |
-| With coagula, log-heavy session | ~30k (dedup carved 85%) | ~$0.075 | **~$3.75** |
-| With coagula, code/mixed session | ~140k (~30% reduction) | ~$0.35 | **~$17.50** |
+The reductions are real and reproducible — those percentages come from
+running the fixture set under `tests/fixtures/` through the current
+funnel. The percentages **do not directly equal dollar savings**: that
+depends on which model your Copilot session uses (rate per million
+tokens), how often you run noisy-tool-heavy investigations, and whether
+you're on Pro / Pro+ / Business / overage tiers.
 
-The savings are real because the lossless stages (Normalize → Dedup →
-Prune) do most of the work *without any model call* — deterministic
-Python that runs in milliseconds. Lite mode (the default when no query
-is set) skips the LLM-based stages entirely, so coagula adds no Azure
-or Ollama spend just to save you Copilot spend.
+**Dollar-savings benchmarks against real Copilot CLI sessions are TBD.**
+I'd rather not put estimated numbers here that I can't back up with
+measurements. If you want to measure on your own workload, a benchmark
+script that runs paired sessions (with / without coagula) and reports
+AI Credit drawdown is on the roadmap; in the meantime you can eyeball
+the per-session token footer Copilot CLI prints to compare.
 
-For heavier API/agent workloads, savings scale linearly. For
-flat-fee plans (Claude Pro, Cursor, Windsurf) the dollar impact is
-zero but you still get faster responses and fewer
-"context-window-exceeded" surprises.
+The mechanics that make any savings possible:
+- The lossless stages (Normalize → Dedup → Prune) run as deterministic
+  Python — milliseconds, no LLM call.
+- Lite mode (the default when no `COAGULA_QUERY` is set) skips the
+  LLM-based stages entirely, so coagula adds no Azure / Ollama spend
+  just to save you Copilot spend.
+- The optional Azure / Ollama tier (Relevance + Summarize) is where
+  quality wins live for known queries; cost-wise it's a wash to
+  small net savings depending on your model choice.
+
+For flat-fee plans (Claude Pro, Cursor, Windsurf) the dollar impact is
+zero. You still get faster responses, less context-window pressure, and
+cleaner inputs to the model.
 
 **Install (Windows):**
 
@@ -60,10 +74,7 @@ pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.7/coagul
 ```
 
 See [the full Copilot CLI walkthrough](#local-setup-walkthrough-github-copilot-cli)
-below for verification steps. Worth knowing: token-reduction percentages
-are highly payload-dependent — a 4000-line crashloop dedups to ~99%, a
-healthy pod's JSON prunes to ~70%, a `cargo build` log gets maybe 20%.
-The lite-mode numbers above assume a typical mix.
+below for verification steps.
 
 References:
 - [GitHub Copilot is moving to usage-based billing — GitHub Blog](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
