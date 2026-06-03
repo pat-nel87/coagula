@@ -326,6 +326,54 @@ def test_budget_critical_overflow_flagged_when_criticals_alone_exceed_cap():
     assert crit.meta.get("critical_overflow") is True
 
 
+def test_budget_truncates_oversized_single_chunk_instead_of_dropping():
+    """Regression for v0.3.7 field bug: a single flat chunk above budget
+    was demoted whole, leaving the assembled prompt empty save for the
+    deferred footer. Now it gets truncated with a retrieval marker."""
+    big = Chunk(text="A" * 8000, source="logs/big")  # ~2000 tokens
+    out = Budget(max_tokens=500).process([big], "q", 500)
+    fillables = [c for c in out if c.tier in (Tier.RELEVANT, Tier.SUMMARIZED)]
+    assert len(fillables) == 1, f"expected truncated chunk in fillables, got {fillables}"
+    kept = fillables[0]
+    # Truncated text is non-trivial — most of the budget worth of content
+    # plus the marker.
+    assert "AAAA" in kept.text
+    assert "[... +" in kept.text and "tokens truncated" in kept.text
+    assert kept.meta.get("truncated") is True
+    assert kept.meta.get("original_tokens") == big.tokens
+    # Original lives in the deferred set for retrieval.
+    deferred = [c for c in out if c.tier == Tier.DEFERRED]
+    assert any(d.text == big.text for d in deferred), \
+        "original full chunk should be retrievable via the deferred store"
+
+
+def test_budget_truncation_respects_min_threshold():
+    """When less than MIN_TRUNCATE_TOKENS room remains, fall back to
+    whole-demote rather than producing a 20-token slice that's useless."""
+    # Cap of 50 < MIN_TRUNCATE_TOKENS (100) — truncation skipped, whole demoted.
+    big = Chunk(text="A" * 8000, source="logs/big")
+    out = Budget(max_tokens=50).process([big], "q", 50)
+    fillables = [c for c in out if c.tier in (Tier.RELEVANT, Tier.SUMMARIZED)]
+    assert fillables == [], "below MIN_TRUNCATE_TOKENS, should whole-demote"
+    assert any(c.tier == Tier.DEFERRED and c.text == big.text for c in out)
+
+
+def test_budget_truncation_preserves_critical_chunks_first():
+    """Truncation only kicks in after CRITICAL chunks are allocated their
+    full token cost (CRITICAL is exempt from the cap per SPEC §6.6)."""
+    crit = Chunk(text="must keep", source="alerts", tier=Tier.CRITICAL)
+    big = Chunk(text="X" * 8000, source="logs/big")
+    out = Budget(max_tokens=500).process([crit, big], "q", 500)
+    # Critical kept verbatim.
+    crits = [c for c in out if c.tier == Tier.CRITICAL]
+    assert crits[0].text == "must keep"
+    # Truncated big chunk also present.
+    fillables = [c for c in out if c.tier in (Tier.RELEVANT, Tier.SUMMARIZED)]
+    assert len(fillables) == 1
+    assert "XXXX" in fillables[0].text
+    assert fillables[0].meta.get("truncated") is True
+
+
 # ---------------------------------------------------------------------------
 # Assemble (SPEC §6.7)
 # ---------------------------------------------------------------------------

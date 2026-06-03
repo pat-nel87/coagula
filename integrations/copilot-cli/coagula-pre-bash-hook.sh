@@ -91,11 +91,22 @@ query="${COAGULA_QUERY:-${COAGULA_TASK:-}}"
 budget="${COAGULA_BUDGET:-2000}"
 keep="${COAGULA_KEEP:-5}"
 
+# Shell-specific command grouping. bash's `( … )` is a subshell that
+# accepts `;`-chained statements. PowerShell's `( … )` is a *grouping
+# expression* that rejects multi-statement bodies — Copilot CLI on
+# Windows then errors with "Missing closing ')'". Use `& { … }`
+# (script-block invocation) when the shell will be PS.
+if [[ "$tool_name" == "powershell" ]]; then
+  wrapped="& { $command } 2>&1"
+else
+  wrapped="( $command ) 2>&1"
+fi
+
 if [[ -n "$query" ]]; then
   quoted_query=$(printf '%q' "$query")
-  rewritten="( $command ) 2>&1 | coagula --query $quoted_query --profile $profile --budget $budget --keep $keep"
+  rewritten="$wrapped | coagula --query $quoted_query --profile $profile --budget $budget --keep $keep"
 else
-  rewritten="( $command ) 2>&1 | coagula --profile $profile --budget $budget --keep $keep"
+  rewritten="$wrapped | coagula --profile $profile --budget $budget --keep $keep"
 fi
 
 # Merge new command into the original args object so other fields (timeout,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coagula"
-version = "0.3.6"
+version = "0.3.7"
 description = "Local context manicuring funnel: trim, dedup, prune, rank, and compress LLM context before it reaches a frontier model."
 requires-python = ">=3.10"
 readme = "README.md"

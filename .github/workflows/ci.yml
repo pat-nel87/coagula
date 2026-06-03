@@ -206,6 +206,55 @@ jobs:
             Write-Host "FAIL: toolName=powershell not rewritten with k8s profile: $($obj | ConvertTo-Json -Compress)"; exit 1
           }
           Write-Host "PASS: toolName=powershell rewritten with k8s profile"
+      - name: preToolUse — semicolon-chained PowerShell parses cleanly
+        shell: pwsh
+        run: |
+          # v0.3.7 regression for Bug A: bash `( cmd1; cmd2 )` is a subshell;
+          # PowerShell `( cmd1; cmd2 )` is a grouping expression that errors
+          # "Missing closing ')'". The hook must emit `& { … }` (script
+          # block) when toolName=powershell so chained commands parse.
+          $payload = '{"toolName":"powershell","toolArgs":"{\"command\":\"curl https://a.example; curl https://b.example\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          $cmd = $obj.modifiedArgs.command
+          if (-not $cmd) { Write-Host "FAIL: no modifiedArgs.command"; exit 1 }
+          # Must use the script-block wrapper, not the bash subshell form.
+          if ($cmd -notmatch '^& \{') {
+            Write-Host "FAIL: PS rewrite missing script-block form: $cmd"; exit 1
+          }
+          # And it must parse as valid PowerShell (the actual regression).
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput(
+            $cmd, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            Write-Host "FAIL: rewritten command does not parse as PowerShell:"
+            $errors | ForEach-Object { Write-Host "  $($_.Message)" }
+            Write-Host "Command was: $cmd"
+            exit 1
+          }
+          Write-Host "PASS: ;-chained PS command rewrites + parses ($cmd)"
+      - name: preToolUse — bash toolName still uses subshell form (regression)
+        shell: pwsh
+        run: |
+          # toolName=bash must keep the `( … )` form so Linux/macOS sessions
+          # don't break.
+          $payload = '{"toolName":"bash","toolArgs":"{\"command\":\"curl https://example.com\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $cmd = ($out | ConvertFrom-Json).modifiedArgs.command
+          if ($cmd -notmatch '^\( ') {
+            Write-Host "FAIL: bash toolName lost the ( … ) subshell form: $cmd"; exit 1
+          }
+          Write-Host "PASS: bash toolName uses bash subshell form"
       - name: postToolUse — toolName='powershell' + kubectl should pick profile=k8s
         shell: pwsh
         run: |

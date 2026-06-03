@@ -106,6 +106,26 @@ def test_lite_mode_does_not_call_build_hooks_from_env(monkeypatch):
     )
 
 
+def test_lite_mode_single_oversized_chunk_truncates_not_drops(monkeypatch):
+    """v0.3.7 field regression: single-chunk tool outputs (file reads,
+    grep results, structured listings) collapsed to just the deferred
+    footer when their token count exceeded budget. Now truncation in
+    Budget keeps the head of the content + a retrieval marker."""
+    # ~7500 chars ≈ 1875 tokens, single chunk (no blank-line separator).
+    big = ("A" * 4 + " ") * 1500
+    rc, out = _run_cli(["--budget", "500"], big, monkeypatch)
+    assert rc == 0
+    # Real content survives — not just the deferred footer.
+    assert "AAAA" in out, (
+        f"expected content from oversized chunk, got (first 300): {out[:300]}"
+    )
+    assert "tokens truncated" in out, (
+        f"expected truncation marker, got (last 300): {out[-300:]}"
+    )
+    # Roughly bounded by budget (a bit of headroom for the marker + Assemble headers).
+    assert 100 < len(out) < 3500, f"output length {len(out)} outside expected range"
+
+
 def test_full_mode_DOES_call_build_hooks_from_env(monkeypatch):
     """Sanity: a real --query DOES wire backends from env."""
     called = {"n": 0}

@@ -101,12 +101,24 @@ if ([string]::IsNullOrEmpty($query)) { $query = $env:COAGULA_TASK }
 $budget = if ($env:COAGULA_BUDGET) { [int]$env:COAGULA_BUDGET } else { 2000 }
 $keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
 
+# Shell-specific command grouping. bash's `( … )` is a subshell that
+# accepts `;`-chained statements. PowerShell's `( … )` is a *grouping
+# expression* that rejects multi-statement bodies — Copilot CLI on
+# Windows then errors with "Missing closing ')'". Use `& { … }`
+# (script-block invocation) on the PS side; both forms accept the
+# same `2>&1 | coagula …` tail.
+$wrappedCommand = if ([string]$payload.toolName -eq 'powershell') {
+    "& { $command } 2>&1"
+} else {
+    "( $command ) 2>&1"
+}
+
 if ([string]::IsNullOrEmpty($query)) {
-    $rewritten = "( $command ) 2>&1 | coagula --profile $profile --budget $budget --keep $keep"
+    $rewritten = "$wrappedCommand | coagula --profile $profile --budget $budget --keep $keep"
 } else {
     $escaped = $query -replace "'", "'\''"
     $quotedQuery = "'$escaped'"
-    $rewritten = "( $command ) 2>&1 | coagula --query $quotedQuery --profile $profile --budget $budget --keep $keep"
+    $rewritten = "$wrappedCommand | coagula --query $quotedQuery --profile $profile --budget $budget --keep $keep"
 }
 
 # Merge into the original args object so other fields (description, initial_wait, …) survive.
