@@ -1,4 +1,8 @@
-# coagula
+# coagula™
+
+<p align="center">
+  <img src=".github/assets/coagula-mascot.png" alt="A robed pixel-art character at a control console feeding noisy data through a funnel labeled TRIM / DEDUP / PRUNE / RANK / COMPRESS, with the tagline 'Less Noise. More Signal. Lower Costs.'" width="420">
+</p>
 
 A local **context manicuring funnel**: trim, dedup, prune, rank, and compress
 context *before* it reaches an expensive frontier LLM call, so most tokens are
@@ -471,3 +475,26 @@ See `SPEC.md` for the full contract.
   except for the per-request deferred store.
 - **No telemetry, no network egress on the default path.** Ollama is local;
   the MCP server is stdio.
+
+## License
+
+`coagula` is licensed under the [Apache License, Version 2.0](./LICENSE).
+See [NOTICE](./NOTICE) for attribution requirements.
+
+In short:
+- Free for any use — personal, commercial, hosted, embedded.
+- Modify and redistribute freely; keep the copyright + NOTICE.
+- Patent grant from contributors; patent retaliation if you sue.
+- Provided **as-is**, no warranty.
+
+For vulnerability reports see [SECURITY.md](./SECURITY.md). To contribute,
+see [CONTRIBUTING.md](./CONTRIBUTING.md) — every commit must be DCO-signed
+(`git commit -s`).
+
+### Trademark
+
+**coagula™** is an unregistered common-law trademark of pat-nel87. Use of
+the name to refer to this project (e.g. "I integrated coagula with my MCP
+server") is welcome and encouraged. Please don't use the name or mascot to
+imply endorsement of forks, derivative products, or commercial offerings
+without permission.
