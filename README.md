@@ -429,15 +429,28 @@ Common specifics:
 
 - **macOS:** Library, CLI, MCP server, Ollama, bash hooks in live Copilot
   CLI session — all verified locally.
-- **Windows:** Library + CLI + PS hooks parse + installer dry-run +
-  synthetic-stdin hook tests + CLI-on-Windows fixture reduction — all
-  verified in CI on the Windows-latest runner. A live `copilot` session
-  with hooks installed has NOT been verified end-to-end (no Windows box
-  in the build env). The smoke script above closes that gap when run on
-  a real Windows machine.
-- **Azure OpenAI:** Mocked tests pass; live calls against a real tenant
-  not verified (set `RUN_AZURE_TESTS=1` + the four `AZURE_OPENAI_*` env
-  vars to exercise locally).
+- **Windows + GitHub Copilot CLI:** Verified end-to-end with v0.3.5 on
+  Windows 11 Enterprise + Copilot CLI 1.0.59 + Python 3.13. Hooks fire
+  in live `copilot` sessions, the debug log records transforms, the
+  CLI's lite-mode (no-query) path produces non-empty trimmed output,
+  the Azure OpenAI route succeeds when `AZURE_OPENAI_*` env vars are
+  set, and the install path works without Git Bash present (PowerShell
+  native fallback engages correctly via the WindowsApps WSL-reject
+  guard). The 14-job CI matrix on `windows-latest` covers the same
+  surface continuously.
+- **Windows + Claude Code / VSCode Copilot Chat:** Library + hook config
+  + PS scripts all CI-verified on `windows-latest`. Live session
+  verification on those hosts is still pending — the same hook scripts
+  succeed in real Copilot CLI sessions, so the Bash-only matcher in
+  those hosts is expected to work, but it hasn't been independently
+  reproduced.
+- **Azure OpenAI:** Verified end-to-end against a real tenant (gpt-5.4
+  + gpt-5.4-nano deployments, API version `2024-10-21`). Mocked unit
+  tests run on every push; opt-in integration tests
+  (`RUN_AZURE_TESTS=1` + the four `AZURE_OPENAI_*` env vars) exercise
+  the live wire protocol when credentials are available.
+- **Ollama:** Verified end-to-end on macOS with `nomic-embed-text` +
+  `llama3.2:3b`. Not yet exercised on Windows.
 
 ### Optional: route the funnel's embed + summarize tier through a cheap model
 
