@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coagula"
+version = "0.1.0"
+description = "Local context manicuring funnel: trim, dedup, prune, rank, and compress LLM context before it reaches a frontier model."
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "pat-nel87" }]
+dependencies = []
+
+[project.optional-dependencies]
+tiktoken = ["tiktoken>=0.7"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+coagula = "coagula.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["coagula*"]
+exclude = ["tests*"]
