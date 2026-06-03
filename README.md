@@ -12,6 +12,64 @@ inference.
 Built primarily for noisy diagnostic payloads (kubectl JSON, crashloop logs,
 Postgres stats, Azure ARM responses) but works on any context.
 
+## Why this matters now
+
+GitHub flipped Copilot to **usage-based billing on June 1, 2026**. Every
+Copilot Chat / Copilot CLI premium request now draws from a monthly
+AI Credit budget at the underlying model's API rate — input + output +
+cached tokens, all metered.
+
+Diagnostic-tool sessions are where this hurts. A single agent task
+involving `kubectl describe`, `journalctl`, `az resource show`, or any
+typical multi-tool investigation can burn 50–200k input tokens before
+the model emits an answer. That's a meaningful chunk of a $10/mo Pro
+budget per session.
+
+What coagula does to the bill, for a moderately-heavy Copilot CLI user
+running ~50 noisy-tool sessions per month:
+
+| Session shape | Tokens/session | Cost @ frontier-model rates | Monthly cost |
+|---|---|---|---|
+| Vanilla (no coagula) | ~200k | ~$0.50 | **~$25** |
+| With coagula, log-heavy session | ~30k (dedup carved 85%) | ~$0.075 | **~$3.75** |
+| With coagula, code/mixed session | ~140k (~30% reduction) | ~$0.35 | **~$17.50** |
+
+The savings are real because the lossless stages (Normalize → Dedup →
+Prune) do most of the work *without any model call* — deterministic
+Python that runs in milliseconds. Lite mode (the default when no query
+is set) skips the LLM-based stages entirely, so coagula adds no Azure
+or Ollama spend just to save you Copilot spend.
+
+For heavier API/agent workloads, savings scale linearly. For
+flat-fee plans (Claude Pro, Cursor, Windsurf) the dollar impact is
+zero but you still get faster responses and fewer
+"context-window-exceeded" surprises.
+
+**Install (Windows):**
+
+```powershell
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.5/coagula-0.3.5-py3-none-any.whl
+.\integrations\copilot-cli\install.ps1
+```
+
+**Install (macOS / Linux):**
+
+```bash
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.5/coagula-0.3.5-py3-none-any.whl
+./integrations/copilot-cli/install.sh
+```
+
+See [the full Copilot CLI walkthrough](#local-setup-walkthrough-github-copilot-cli)
+below for verification steps. Worth knowing: token-reduction percentages
+are highly payload-dependent — a 4000-line crashloop dedups to ~99%, a
+healthy pod's JSON prunes to ~70%, a `cargo build` log gets maybe 20%.
+The lite-mode numbers above assume a typical mix.
+
+References:
+- [GitHub Copilot is moving to usage-based billing — GitHub Blog](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
+- [Models and pricing for GitHub Copilot — GitHub Docs](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+- ["What a joke": GitHub Copilot's new token-based billing — TechCrunch](https://techcrunch.com/2026/05/30/what-a-joke-github-copilots-new-token-based-billing-spurs-consternation-among-devs/)
+
 ## Status
 
 **v0.3.5** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
