@@ -145,9 +145,12 @@ jobs:
             Write-Host "FAIL: rewrite missing k8s profile: $($obj.modifiedArgs.command)"; exit 1
           }
           Write-Host "PASS: preToolUse kubectl rewrite ($($obj.modifiedArgs.command))"
-      - name: preToolUse — curl should be rewritten
+      - name: preToolUse — curl should be rewritten (lite mode, no query)
         shell: pwsh
         run: |
+          # No COAGULA_QUERY set — the hook should now OMIT --query so the
+          # CLI runs in lite mode. Assertion: `coagula --profile passthrough`
+          # is present, `--query` is absent.
           $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"curl -s https://api.example.com/big.json\"}"}'
           Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
           try {
@@ -156,16 +159,21 @@ jobs:
             Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
           }
           $obj = $out | ConvertFrom-Json
-          if (-not $obj.modifiedArgs.command -or $obj.modifiedArgs.command -notmatch 'coagula --query') {
+          $cmd = $obj.modifiedArgs.command
+          if (-not $cmd -or $cmd -notmatch 'coagula --profile') {
             Write-Host "FAIL: curl not rewritten: $($obj | ConvertTo-Json -Compress)"; exit 1
           }
-          Write-Host "PASS: curl rewritten"
+          if ($cmd -match '--query') {
+            Write-Host "FAIL: --query appeared in rewrite despite no COAGULA_QUERY: $cmd"; exit 1
+          }
+          Write-Host "PASS: curl rewritten in lite mode ($cmd)"
       - name: preToolUse — Invoke-WebRequest (PS cmdlet) should be rewritten
         shell: pwsh
         run: |
           # PowerShell cmdlets like Invoke-WebRequest are common when MCP
           # endpoints are reached over HTTPS from a locked-down corp box.
-          # Case-insensitive matching also catches inVoke-webREQUEST etc.
+          # Setting COAGULA_QUERY here also verifies the --query path.
+          $env:COAGULA_QUERY = "what's wrong with the deployment"
           $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"Invoke-WebRequest https://mcp.internal/big -UseBasicParsing\"}"}'
           Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
           try {
@@ -177,10 +185,11 @@ jobs:
           if (-not $obj.modifiedArgs.command -or $obj.modifiedArgs.command -notmatch 'coagula --query') {
             Write-Host "FAIL: Invoke-WebRequest not rewritten: $($obj | ConvertTo-Json -Compress)"; exit 1
           }
-          Write-Host "PASS: Invoke-WebRequest rewritten"
+          Write-Host "PASS: Invoke-WebRequest rewritten with --query"
       - name: preToolUse — case-insensitive (INVOKE-RESTMETHOD) should be rewritten
         shell: pwsh
         run: |
+          $env:COAGULA_QUERY = "test"
           $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"bash","toolArgs":"{\"command\":\"INVOKE-RESTMETHOD https://api.example.com/v2\"}"}'
           Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
           try {
