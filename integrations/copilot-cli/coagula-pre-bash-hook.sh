@@ -77,18 +77,36 @@ case "$stripped" in
   az*|gcloud*|aws*)       profile="azure" ;;
 esac
 
-# Query derivation (env first, generic fallback).
-query="${COAGULA_QUERY:-${COAGULA_TASK:-general diagnostic query}}"
+# Query derivation: env first; otherwise OMIT --query entirely so the
+# CLI runs in lite mode (lossless stages only). Passing a generic string
+# like "general diagnostic query" causes Relevance + Summarize to
+# collapse output to ~1 token — a real bug observed in the field.
+query="${COAGULA_QUERY:-${COAGULA_TASK:-}}"
 
 budget="${COAGULA_BUDGET:-2000}"
 keep="${COAGULA_KEEP:-5}"
 
-quoted_query=$(printf '%q' "$query")
-rewritten="( $command ) 2>&1 | coagula --query $quoted_query --profile $profile --budget $budget --keep $keep"
+if [[ -n "$query" ]]; then
+  quoted_query=$(printf '%q' "$query")
+  rewritten="( $command ) 2>&1 | coagula --query $quoted_query --profile $profile --budget $budget --keep $keep"
+else
+  rewritten="( $command ) 2>&1 | coagula --profile $profile --budget $budget --keep $keep"
+fi
 
 # Merge new command into the original args object so other fields (timeout,
 # description, initial_wait, ...) are preserved.
 new_args=$(printf '%s' "$parsed_args" | jq -c --arg cmd "$rewritten" '.command = $cmd')
+
+# Debug log — append-only, transform-only.
+log_path="${COAGULA_DEBUG_LOG:-$HOME/.copilot/coagula-debug.log}"
+case "$log_path" in
+  off|OFF|disabled|DISABLED|0) : ;;
+  *)
+    ts=$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    printf '%s [pre-bash] rewrote (profile=%s): %s\n' "$ts" "$profile" "$command" \
+      >>"$log_path" 2>/dev/null || true
+    ;;
+esac
 
 jq -nc \
   --argjson args "$new_args" \

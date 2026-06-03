@@ -208,6 +208,45 @@ def test_ollama_returns_none_when_unreachable(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Graceful degradation — Azure factories wired with fallback callables
+# ---------------------------------------------------------------------------
+
+
+def test_azure_embedder_falls_back_on_runtime_failure(monkeypatch):
+    """Mid-funnel Azure failure must NOT crash; fallback returns zero vectors."""
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "k")
+    monkeypatch.setenv("AZURE_OPENAI_LLM_DEPLOYMENT", "gpt-nano")
+    monkeypatch.setenv("AZURE_OPENAI_EMBED_DEPLOYMENT", "text-embed")
+    _mock_azure_reachable(monkeypatch)  # ping succeeds
+
+    embedder, llm = _try_azure_openai()
+    assert embedder is not None and llm is not None
+
+    # Now make subsequent calls fail.
+    _mock_azure_unreachable(monkeypatch)
+    vecs = embedder(["one", "two"])  # must not raise
+    assert vecs == [[0.0], [0.0]]
+
+
+def test_azure_llm_falls_back_on_runtime_failure(monkeypatch):
+    """Same shape for the LLM hook."""
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "k")
+    monkeypatch.setenv("AZURE_OPENAI_LLM_DEPLOYMENT", "gpt-nano")
+    _mock_azure_reachable(monkeypatch)
+
+    _, llm = _try_azure_openai()
+    assert llm is not None
+
+    _mock_azure_unreachable(monkeypatch)
+    result = llm("any prompt")  # must not raise
+    # Fallback returns empty string — Summarize keeps the original chunk
+    # untouched in that case.
+    assert result == ""
+
+
+# ---------------------------------------------------------------------------
 # CLI integration — main() actually calls build_hooks_from_env
 # ---------------------------------------------------------------------------
 

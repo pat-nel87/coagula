@@ -14,7 +14,7 @@ Postgres stats, Azure ARM responses) but works on any context.
 
 ## Status
 
-**v0.3.4** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
+**v0.3.5** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
 MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
 1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
 interception via PowerShell/Bash host hooks). Optional cheap-inference
@@ -27,10 +27,10 @@ with the FATAL signal always preserved.
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.4/coagula-0.3.4-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.5/coagula-0.3.5-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.4/coagula-0.3.4-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.5/coagula-0.3.5-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula
@@ -277,6 +277,34 @@ $env:COAGULA_DISABLE    = 1   # kill switch
 For per-task queries that improve relevance ranking on specific commands,
 set `COAGULA_QUERY` to whatever question you're trying to answer right
 before you start the `copilot` session.
+
+**Lite mode** — when neither `COAGULA_QUERY` nor `COAGULA_TASK` is set,
+the hooks invoke `coagula` without `--query`, which runs a
+lossless-only funnel (Normalize → Dedup → Prune → Budget → Assemble).
+This still gets 95%+ reduction on log-shaped output via dedup alone, and
+deliberately skips the Relevance + Summarize stages — those need a real
+query to do anything useful, and ranking against a generic placeholder
+string was observed to collapse output to ~1 token in production
+sessions. No Azure or Ollama call happens in lite mode either, so
+default `copilot` usage stays free of per-session backend latency.
+
+**Debug log** — when a hook actually transforms output, it appends a
+single line to `$env:USERPROFILE\.copilot\coagula-debug.log` (or
+`~/.copilot/coagula-debug.log` on macOS/Linux). Tail it during a session
+to verify hooks are firing:
+
+```powershell
+# Windows
+Get-Content $env:USERPROFILE\.copilot\coagula-debug.log -Wait
+
+# macOS / Linux
+tail -f ~/.copilot/coagula-debug.log
+```
+
+Disable logging entirely with `COAGULA_DEBUG_LOG=off`; override the path
+with `COAGULA_DEBUG_LOG=/some/other/path`. Passthroughs (commands that
+didn't match the noisy pattern, or outputs under the threshold) do *not*
+write to the log — only real transforms appear, so the log is signal-dense.
 
 #### 6. (Optional) Add the MCP server too
 

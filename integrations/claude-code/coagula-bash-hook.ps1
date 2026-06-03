@@ -31,10 +31,12 @@ $ErrorActionPreference = 'Stop'
 
 # Defer to bash only when it can actually read Windows paths. WSL bash
 # (uname -s == Linux) silently fails on C:\... siblings — skip it.
+# WindowsApps reject covers Win11 default Store stubs.
 function Test-SafeBash {
     param([string]$BashPath)
     if (-not $BashPath) { return $false }
     if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+    if ($BashPath -match '\\WindowsApps\\') { return $false }
     $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
     if (-not $onWindows) { return $true }
     try {
@@ -47,7 +49,8 @@ $siblingSh = Join-Path $PSScriptRoot 'coagula-bash-hook.sh'
 $bashExe   = Get-Command bash -ErrorAction SilentlyContinue
 if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
     $stdin = [Console]::In.ReadToEnd()
-    $stdin | & $bashExe.Source $siblingSh
+    $siblingForBash = $siblingSh -replace '\\','/'
+    $stdin | & $bashExe.Source $siblingForBash
     exit $LASTEXITCODE
 }
 
@@ -111,14 +114,28 @@ if ([string]::IsNullOrEmpty($query) -and $payload.transcript_path -and (Test-Pat
         }
     } catch {}
 }
-if ([string]::IsNullOrEmpty($query)) { $query = 'general diagnostic query' }
+# No fallback string — empty query triggers lite mode in the CLI.
 
 $budget = if ($env:COAGULA_BUDGET) { [int]$env:COAGULA_BUDGET } else { 2000 }
 $keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
 
-$escaped = $query -replace "'", "'\''"
-$quotedQuery = "'$escaped'"
-$rewritten = "( $command ) 2>&1 | coagula --query $quotedQuery --profile $profile --budget $budget --keep $keep"
+if ([string]::IsNullOrEmpty($query)) {
+    $rewritten = "( $command ) 2>&1 | coagula --profile $profile --budget $budget --keep $keep"
+} else {
+    $escaped = $query -replace "'", "'\''"
+    $quotedQuery = "'$escaped'"
+    $rewritten = "( $command ) 2>&1 | coagula --query $quotedQuery --profile $profile --budget $budget --keep $keep"
+}
+
+# Debug log — transform-only. Default ~/.copilot/coagula-debug.log; the
+# claude-code hook logs to the same file so all hook activity is in one
+# tail. Override path with COAGULA_DEBUG_LOG=<path>, disable with =off.
+$logPath = if ($env:COAGULA_DEBUG_LOG) { $env:COAGULA_DEBUG_LOG } `
+           else { Join-Path $env:USERPROFILE '.copilot\coagula-debug.log' }
+if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
+    $msg = "$(Get-Date -Format 'o') [claude-pre-bash] rewrote (profile=$profile): $command"
+    Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue
+}
 
 $response = @{
     hookSpecificOutput = @{

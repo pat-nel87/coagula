@@ -78,8 +78,8 @@ if printf '%s' "$result_text" | head -c 200 | grep -q '^### '; then
   echo '{}'; exit 0
 fi
 
-# Derive query.
-query="${COAGULA_QUERY:-${COAGULA_TASK:-general diagnostic query}}"
+# Derive query — empty means lite mode (no Relevance/Summarize).
+query="${COAGULA_QUERY:-${COAGULA_TASK:-}}"
 
 # Auto-detect profile from the tool / command.
 profile="passthrough"
@@ -101,9 +101,17 @@ budget="${COAGULA_BUDGET:-2000}"
 keep="${COAGULA_KEEP:-5}"
 
 # Funnel the text. If coagula errors, fall through to no-op (keep original).
-cleaned=$(printf '%s' "$result_text" \
-  | coagula --query "$query" --profile "$profile" --budget "$budget" --keep "$keep" 2>/dev/null \
-  || true)
+# Omit --query when empty so the CLI runs in lite mode and doesn't
+# collapse output against a meaningless query string.
+if [[ -n "$query" ]]; then
+  cleaned=$(printf '%s' "$result_text" \
+    | coagula --query "$query" --profile "$profile" --budget "$budget" --keep "$keep" 2>/dev/null \
+    || true)
+else
+  cleaned=$(printf '%s' "$result_text" \
+    | coagula --profile "$profile" --budget "$budget" --keep "$keep" 2>/dev/null \
+    || true)
+fi
 
 if [[ -z "$cleaned" ]]; then
   echo '{}'; exit 0
@@ -113,9 +121,24 @@ fi
 cleaned_chars=${#cleaned}
 (( cleaned_chars >= result_chars )) && { echo '{}'; exit 0; }
 
+cleaned_tokens=$(( cleaned_chars / 4 ))
+
 # Prefix a tiny note so the model knows the transformation happened.
-final="[coagula: ${result_tokens} → $(( cleaned_chars / 4 )) tok | tool=${tool_name} profile=${profile}]
+final="[coagula: ${result_tokens} → ${cleaned_tokens} tok | tool=${tool_name} profile=${profile}]
 ${cleaned}"
+
+# Debug log — append-only, transform-only entries. Disable with
+# COAGULA_DEBUG_LOG=off, override path with COAGULA_DEBUG_LOG=<path>.
+log_path="${COAGULA_DEBUG_LOG:-$HOME/.copilot/coagula-debug.log}"
+case "$log_path" in
+  off|OFF|disabled|DISABLED|0) : ;;
+  *)
+    ts=$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    printf '%s [post-tool] funneled (tool=%s profile=%s): %s -> %s tok\n' \
+      "$ts" "$tool_name" "$profile" "$result_tokens" "$cleaned_tokens" \
+      >>"$log_path" 2>/dev/null || true
+    ;;
+esac
 
 # Return modifiedResult to replace what the model sees.
 jq -nc \

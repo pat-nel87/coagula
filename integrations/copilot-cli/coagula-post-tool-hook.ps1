@@ -33,18 +33,24 @@ param()
 $ErrorActionPreference = 'Stop'
 
 # ---- Auto-detect: defer to bash if it's a Windows-path-aware bash ---------
-# `Get-Command bash` on Windows can resolve to the WSL launcher
-# (C:\Windows\System32\bash.exe). WSL runs Linux which cannot read
-# C:\... paths — calling our .sh sibling through it silently fails.
-# Defer only when bash reports a Windows-native flavor (MINGW / CYGWIN /
-# MSYS). On macOS/Linux any bash is fine.
+# `Get-Command bash` on Windows can resolve to:
+#   - C:\Windows\System32\bash.exe       (WSL launcher, classic)
+#   - %LOCALAPPDATA%\Microsoft\WindowsApps\bash.exe   (WSL Store stub, Win11 default)
+# Both run Linux which cannot read C:\... paths — calling our .sh sibling
+# through them silently fails. Defer only when bash is a Windows-native
+# flavor (Git Bash MINGW / Cygwin / MSYS). On macOS/Linux any bash is fine.
 function Test-SafeBash {
     param([string]$BashPath)
     if (-not $BashPath) { return $false }
-    # Hard reject the WSL launcher path even before invoking it.
+    # Hard reject known WSL launcher locations before invocation. The
+    # WindowsApps reject is critical on Win11 — that's the default Store
+    # stub location and a uname probe there can hang or prompt.
     if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+    if ($BashPath -match '\\WindowsApps\\') { return $false }
     $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
     if (-not $onWindows) { return $true }
+    # Secondary safety on Windows: a bash binary in some unexpected
+    # location that turns out to be WSL/cmder/etc. -> uname -s tells us.
     try {
         $u = & $BashPath -c 'uname -s' 2>$null
         return ($u -match '^(MINGW|CYGWIN|MSYS)')
@@ -55,8 +61,11 @@ $siblingSh = Join-Path $PSScriptRoot 'coagula-post-tool-hook.sh'
 $bashExe   = Get-Command bash -ErrorAction SilentlyContinue
 if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
     # Read stdin, forward to the bash impl, return its stdout verbatim.
+    # Convert backslashes -> forward slashes; Git Bash handles C:/... but
+    # backslashes get interpreted as escapes and silently strip the path.
     $stdin = [Console]::In.ReadToEnd()
-    $stdin | & $bashExe.Source $siblingSh
+    $siblingForBash = $siblingSh -replace '\\','/'
+    $stdin | & $bashExe.Source $siblingForBash
     exit $LASTEXITCODE
 }
 
@@ -104,10 +113,10 @@ if ($resultTokens -lt $threshold) { Out-NoOp }
 $head = if ($resultChars -ge 200) { $resultText.Substring(0, 200) } else { $resultText }
 if ($head -match '(?m)^### ') { Out-NoOp }
 
-# Derive query.
+# Derive query — empty means lite mode (omit --query so the CLI skips
+# Relevance + Summarize against a meaningless string).
 $query = $env:COAGULA_QUERY
 if ([string]::IsNullOrEmpty($query)) { $query = $env:COAGULA_TASK }
-if ([string]::IsNullOrEmpty($query)) { $query = 'general diagnostic query' }
 
 # Profile auto-detection (bash tool only — match the .sh logic).
 $profile = 'passthrough'
@@ -131,8 +140,13 @@ $budget = if ($env:COAGULA_BUDGET) { [int]$env:COAGULA_BUDGET } else { 2000 }
 $keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
 
 # Funnel via the coagula CLI. On any error, fall through to no-op.
+# Omit --query when empty so the CLI runs lite mode.
 try {
-    $cleaned = $resultText | & coagula --query $query --profile $profile --budget $budget --keep $keep 2>$null
+    if ([string]::IsNullOrEmpty($query)) {
+        $cleaned = $resultText | & coagula --profile $profile --budget $budget --keep $keep 2>$null
+    } else {
+        $cleaned = $resultText | & coagula --query $query --profile $profile --budget $budget --keep $keep 2>$null
+    }
     if ($LASTEXITCODE -ne 0) { Out-NoOp }
 } catch {
     Out-NoOp
@@ -143,7 +157,18 @@ if ([string]::IsNullOrEmpty($cleaned)) { Out-NoOp }
 # Skip the swap if not actually smaller.
 if ($cleaned.Length -ge $resultChars) { Out-NoOp }
 
-$finalText = "[coagula: $resultTokens -> $([int]($cleaned.Length / 4)) tok | tool=$toolName profile=$profile]`n$cleaned"
+$cleanedTokens = [int]($cleaned.Length / 4)
+$finalText = "[coagula: $resultTokens -> $cleanedTokens tok | tool=$toolName profile=$profile]`n$cleaned"
+
+# Debug log — append-only, transform-only entries. Disable with
+# COAGULA_DEBUG_LOG=off, override path with COAGULA_DEBUG_LOG=<path>.
+# Default: ~/.copilot/coagula-debug.log (silently no-ops if dir missing).
+$logPath = if ($env:COAGULA_DEBUG_LOG) { $env:COAGULA_DEBUG_LOG } `
+           else { Join-Path $env:USERPROFILE '.copilot\coagula-debug.log' }
+if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
+    $msg = "$(Get-Date -Format 'o') [post-tool] funneled (tool=$toolName profile=$profile): $resultTokens -> $cleanedTokens tok"
+    Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue
+}
 
 $response = @{
     modifiedResult = @{

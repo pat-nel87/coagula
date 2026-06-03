@@ -87,7 +87,8 @@ if [[ -z "$query" ]]; then
             | tail -n 1 | tr '\n' ' ' | cut -c1-200)
   fi
 fi
-[[ -z "$query" ]] && query="general diagnostic query"
+# No fallback string — when query is empty, omit --query so the CLI
+# runs in lite mode rather than ranking against a meaningless string.
 
 budget="${COAGULA_BUDGET:-2000}"
 keep="${COAGULA_KEEP:-5}"
@@ -100,12 +101,25 @@ case "$stripped" in
   az*|gcloud*|aws*)              profile="azure" ;;
 esac
 
-# Shell-quote the query for safe interpolation.
-quoted_query=$(printf '%q' "$query")
+# Rewrite the command. Wrap in a subshell so existing redirections/pipes
+# are preserved, then pipe the combined output through coagula.
+if [[ -n "$query" ]]; then
+  quoted_query=$(printf '%q' "$query")
+  rewritten="( $command ) 2>&1 | coagula --query $quoted_query --profile $profile --budget $budget --keep $keep"
+else
+  rewritten="( $command ) 2>&1 | coagula --profile $profile --budget $budget --keep $keep"
+fi
 
-# Rewrite the command: wrap in a subshell so existing redirections/pipes are
-# preserved, then pipe the combined output through coagula.
-rewritten="( $command ) 2>&1 | coagula --query $quoted_query --profile $profile --budget $budget --keep $keep"
+# Debug log — append-only, transform-only.
+log_path="${COAGULA_DEBUG_LOG:-$HOME/.copilot/coagula-debug.log}"
+case "$log_path" in
+  off|OFF|disabled|DISABLED|0) : ;;
+  *)
+    ts=$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    printf '%s [claude-pre-bash] rewrote (profile=%s): %s\n' "$ts" "$profile" "$command" \
+      >>"$log_path" 2>/dev/null || true
+    ;;
+esac
 
 # Emit PreToolUse response with updatedInput.command.
 jq -nc \

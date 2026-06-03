@@ -33,12 +33,35 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
+def _azure_llm_fallback(prompt: str) -> str:
+    """If Azure fails mid-call, return the input text unchanged.
+
+    Summarize's input prompt embeds the chunk text after a "Compress the
+    following text..." preamble. Returning the prompt verbatim is wrong
+    (it'd include the meta-instructions) but it never crashes the funnel.
+    Better: return an empty string so Summarize keeps the original chunk
+    untouched — Budget will trim it if needed.
+    """
+    return ""
+
+
+def _azure_embed_fallback(texts: list[str]) -> list[list[float]]:
+    """Return zero vectors. Cosine similarity treats these as score=0,
+    so Relevance falls back to keeping the first K chunks in order
+    rather than crashing."""
+    return [[0.0] for _ in texts]
+
+
 def _try_azure_openai() -> tuple[Callable | None, Callable | None] | None:
     """Wire Azure OpenAI if env vars are present and a ping succeeds.
 
     Required: AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY + at least one of
     AZURE_OPENAI_LLM_DEPLOYMENT / AZURE_OPENAI_EMBED_DEPLOYMENT.
     Optional: AZURE_OPENAI_API_VERSION (default 2024-10-21).
+
+    Both factories get fallback callables so a transient network blip
+    during a funnel call degrades gracefully rather than crashing the
+    whole hook pipeline.
     """
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
     api_key = os.environ.get("AZURE_OPENAI_API_KEY")
@@ -57,11 +80,13 @@ def _try_azure_openai() -> tuple[Callable | None, Callable | None] | None:
         endpoint, embed_dep or "(none)", llm_dep or "(none)", api_version,
     )
     embedder = (
-        az.make_embedder(embed_dep, endpoint, api_key, api_version=api_version)
+        az.make_embedder(embed_dep, endpoint, api_key, api_version=api_version,
+                         fallback=_azure_embed_fallback)
         if embed_dep else None
     )
     llm = (
-        az.make_llm(llm_dep, endpoint, api_key, api_version=api_version)
+        az.make_llm(llm_dep, endpoint, api_key, api_version=api_version,
+                    fallback=_azure_llm_fallback)
         if llm_dep else None
     )
     return embedder, llm

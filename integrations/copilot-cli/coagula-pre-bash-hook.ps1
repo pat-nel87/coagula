@@ -13,10 +13,14 @@ $ErrorActionPreference = 'Stop'
 
 # Defer to bash only when it can actually read Windows paths. WSL bash
 # (uname -s == Linux) silently fails on C:\... siblings — skip it.
+# Path-reject known WSL launcher locations before invocation; the
+# WindowsApps reject covers Win11 default Store stubs which may hang
+# or prompt on uname.
 function Test-SafeBash {
     param([string]$BashPath)
     if (-not $BashPath) { return $false }
     if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+    if ($BashPath -match '\\WindowsApps\\') { return $false }
     $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
     if (-not $onWindows) { return $true }
     try {
@@ -29,7 +33,9 @@ $siblingSh = Join-Path $PSScriptRoot 'coagula-pre-bash-hook.sh'
 $bashExe   = Get-Command bash -ErrorAction SilentlyContinue
 if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
     $stdin = [Console]::In.ReadToEnd()
-    $stdin | & $bashExe.Source $siblingSh
+    # Forward slashes — Git Bash handles C:/...; backslashes get escaped away.
+    $siblingForBash = $siblingSh -replace '\\','/'
+    $stdin | & $bashExe.Source $siblingForBash
     exit $LASTEXITCODE
 }
 
@@ -85,24 +91,35 @@ switch -Regex ($stripped) {
     '^(az|gcloud|aws)\s'       { $profile = 'azure'; break }
 }
 
-# Query derivation.
+# Query derivation — empty means lite mode (omit --query so the CLI
+# skips Relevance + Summarize against a meaningless string).
 $query = $env:COAGULA_QUERY
 if ([string]::IsNullOrEmpty($query)) { $query = $env:COAGULA_TASK }
-if ([string]::IsNullOrEmpty($query)) { $query = 'general diagnostic query' }
 
 $budget = if ($env:COAGULA_BUDGET) { [int]$env:COAGULA_BUDGET } else { 2000 }
 $keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
 
-# Shell-escape the query for embedding in the rewritten bash pipeline.
-$escaped = $query -replace "'", "'\''"
-$quotedQuery = "'$escaped'"
-
-$rewritten = "( $command ) 2>&1 | coagula --query $quotedQuery --profile $profile --budget $budget --keep $keep"
+if ([string]::IsNullOrEmpty($query)) {
+    $rewritten = "( $command ) 2>&1 | coagula --profile $profile --budget $budget --keep $keep"
+} else {
+    $escaped = $query -replace "'", "'\''"
+    $quotedQuery = "'$escaped'"
+    $rewritten = "( $command ) 2>&1 | coagula --query $quotedQuery --profile $profile --budget $budget --keep $keep"
+}
 
 # Merge into the original args object so other fields (description, initial_wait, …) survive.
 $newArgs = @{}
 foreach ($p in $argsObj.PSObject.Properties) { $newArgs[$p.Name] = $p.Value }
 $newArgs.command = $rewritten
+
+# Debug log — append-only, transform-only entries. See post-tool hook
+# for env var details.
+$logPath = if ($env:COAGULA_DEBUG_LOG) { $env:COAGULA_DEBUG_LOG } `
+           else { Join-Path $env:USERPROFILE '.copilot\coagula-debug.log' }
+if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
+    $msg = "$(Get-Date -Format 'o') [pre-bash] rewrote (profile=$profile): $command"
+    Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue
+}
 
 $response = @{
     permissionDecision = 'allow'

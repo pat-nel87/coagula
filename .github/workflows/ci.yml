@@ -305,14 +305,54 @@ jobs:
             param([string]$BashPath)
             if (-not $BashPath) { return $false }
             if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
+            if ($BashPath -match '\\WindowsApps\\') { return $false }
             return $true  # short-circuit the rest for this isolated test
           }
-          $launcher = 'C:\Windows\System32\bash.exe'
-          if (Test-SafeBash $launcher) {
-            Write-Host "FAIL: WSL launcher path not rejected"
+          $launchers = @(
+            'C:\Windows\System32\bash.exe'
+            # Win11 default Store stub — the actual failure mode from the v0.3.0 field report.
+            "C:\Users\j\AppData\Local\Microsoft\WindowsApps\bash.exe"
+          )
+          foreach ($l in $launchers) {
+            if (Test-SafeBash $l) {
+              Write-Host "FAIL: WSL launcher path '$l' was NOT rejected"
+              exit 1
+            }
+            Write-Host "PASS: rejected $l"
+          }
+
+      - name: postToolUse hook writes a debug log entry on transform
+        shell: pwsh
+        run: |
+          # Field-request: users couldn't tell whether hooks were firing.
+          # The hook now appends a transform-only line to ~/.copilot/coagula-debug.log.
+          # Override path via COAGULA_DEBUG_LOG to keep this test isolated.
+          pip install -e .
+          $logFile = Join-Path $env:RUNNER_TEMP "coagula-debug-$(Get-Random).log"
+          $env:COAGULA_DEBUG_LOG = $logFile
+          Move-Item integrations/copilot-cli/coagula-post-tool-hook.sh integrations/copilot-cli/coagula-post-tool-hook.sh.bak
+          try {
+            $big = Get-Content -Raw tests/fixtures/crashloop.log
+            $payload = @{
+              sessionId="x"; timestamp=1; cwd="/tmp"
+              toolName="bash"
+              toolArgs=@{ command="journalctl -u svc" }
+              toolResult=@{ resultType="success"; textResultForLlm=$big }
+            } | ConvertTo-Json -Depth 6 -Compress
+            $null = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-post-tool-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-post-tool-hook.sh.bak integrations/copilot-cli/coagula-post-tool-hook.sh
+          }
+          if (-not (Test-Path $logFile)) {
+            Write-Host "FAIL: debug log file not created at $logFile"
             exit 1
           }
-          Write-Host "PASS: WSL launcher path rejected by path pattern"
+          $content = Get-Content -Raw -LiteralPath $logFile
+          if ($content -notmatch '\[post-tool\] funneled') {
+            Write-Host "FAIL: log file missing [post-tool] entry. Content: $content"
+            exit 1
+          }
+          Write-Host "PASS: debug log entry written: $($content.Trim())"
 
       - name: install.ps1 PATH refresh surfaces freshly-installed coagula
         shell: pwsh
