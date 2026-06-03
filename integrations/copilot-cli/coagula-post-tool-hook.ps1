@@ -1,0 +1,137 @@
+# GitHub Copilot CLI postToolUse universal interceptor (PowerShell port).
+#
+# Mirrors coagula-post-tool-hook.sh. Catches the result of any tool above a
+# token threshold and replaces it via modifiedResult so the model only sees
+# the funneled version.
+#
+# AUTO-DETECT: if Git Bash is available AND the .sh sibling exists, defers
+# to the bash implementation (single source of truth). Otherwise does the
+# work natively in PowerShell.
+#
+# Wire it up via ~/.copilot/hooks/coagula.json with BOTH bash and powershell
+# fields — the Copilot CLI host auto-picks per platform:
+#
+#   {
+#     "version": 1,
+#     "hooks": {
+#       "postToolUse": [
+#         {
+#           "type": "command",
+#           "bash":       "/path/to/coagula-post-tool-hook.sh",
+#           "powershell": "powershell -NoProfile -File C:\\path\\to\\coagula-post-tool-hook.ps1"
+#         }
+#       ]
+#     }
+#   }
+#
+# Env knobs match the bash version: COAGULA_QUERY, COAGULA_BUDGET, COAGULA_KEEP,
+# COAGULA_THRESHOLD, COAGULA_SKIP_TOOLS, COAGULA_DISABLE.
+
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+
+# ---- Auto-detect: defer to bash if available ------------------------------
+$siblingSh = Join-Path $PSScriptRoot 'coagula-post-tool-hook.sh'
+$bashExe   = Get-Command bash -ErrorAction SilentlyContinue
+if ($bashExe -and (Test-Path $siblingSh)) {
+    # Read stdin, forward to the bash impl, return its stdout verbatim.
+    $stdin = [Console]::In.ReadToEnd()
+    $stdin | & $bashExe.Source $siblingSh
+    exit $LASTEXITCODE
+}
+
+# ---- Native PowerShell implementation -------------------------------------
+
+# Read stdin payload from Copilot CLI.
+$raw = [Console]::In.ReadToEnd()
+
+function Out-NoOp { Write-Output '{}'; exit 0 }
+
+if ($env:COAGULA_DISABLE -eq '1') { Out-NoOp }
+if (-not (Get-Command coagula -ErrorAction SilentlyContinue)) { Out-NoOp }
+
+try {
+    $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+} catch {
+    Out-NoOp
+}
+
+$toolName   = [string]$payload.toolName
+$resultType = [string]$payload.toolResult.resultType
+$resultText = [string]$payload.toolResult.textResultForLlm
+
+if ([string]::IsNullOrEmpty($toolName) -or
+    [string]::IsNullOrEmpty($resultText) -or
+    $resultType -ne 'success') { Out-NoOp }
+
+# Always-skipped internal bookkeeping tools (match the bash impl).
+$alwaysSkip = @('report_intent', 'sql', 'notification')
+if ($alwaysSkip -contains $toolName) { Out-NoOp }
+if ($toolName -like 'todo_*') { Out-NoOp }
+
+if ($env:COAGULA_SKIP_TOOLS) {
+    $extra = $env:COAGULA_SKIP_TOOLS -split ',' | ForEach-Object { $_.Trim() }
+    if ($extra -contains $toolName) { Out-NoOp }
+}
+
+# Threshold check (chars / 4 token estimate — matches coagula.tokens fallback).
+$threshold = if ($env:COAGULA_THRESHOLD) { [int]$env:COAGULA_THRESHOLD } else { 2000 }
+$resultChars  = $resultText.Length
+$resultTokens = [int]($resultChars / 4)
+if ($resultTokens -lt $threshold) { Out-NoOp }
+
+# Idempotency guard: skip if the result already looks like coagula output.
+$head = if ($resultChars -ge 200) { $resultText.Substring(0, 200) } else { $resultText }
+if ($head -match '(?m)^### ') { Out-NoOp }
+
+# Derive query.
+$query = $env:COAGULA_QUERY
+if ([string]::IsNullOrEmpty($query)) { $query = $env:COAGULA_TASK }
+if ([string]::IsNullOrEmpty($query)) { $query = 'general diagnostic query' }
+
+# Profile auto-detection (bash tool only — match the .sh logic).
+$profile = 'passthrough'
+if ($toolName -eq 'bash') {
+    # toolArgs may be either a JSON string or a parsed object.
+    $argsObj = $null
+    if ($payload.toolArgs -is [string]) {
+        try { $argsObj = $payload.toolArgs | ConvertFrom-Json -ErrorAction Stop } catch {}
+    } else {
+        $argsObj = $payload.toolArgs
+    }
+    $command = if ($argsObj) { [string]$argsObj.command } else { '' }
+    switch -Regex ($command) {
+        '^(kubectl|oc|helm)\s'           { $profile = 'k8s'; break }
+        '^(psql|mysql|sqlite3)\s'        { $profile = 'postgres'; break }
+        '^(az|gcloud|aws)\s'             { $profile = 'azure'; break }
+    }
+}
+
+$budget = if ($env:COAGULA_BUDGET) { [int]$env:COAGULA_BUDGET } else { 2000 }
+$keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
+
+# Funnel via the coagula CLI. On any error, fall through to no-op.
+try {
+    $cleaned = $resultText | & coagula --query $query --profile $profile --budget $budget --keep $keep 2>$null
+    if ($LASTEXITCODE -ne 0) { Out-NoOp }
+} catch {
+    Out-NoOp
+}
+
+if ([string]::IsNullOrEmpty($cleaned)) { Out-NoOp }
+
+# Skip the swap if not actually smaller.
+if ($cleaned.Length -ge $resultChars) { Out-NoOp }
+
+$finalText = "[coagula: $resultTokens -> $([int]($cleaned.Length / 4)) tok | tool=$toolName profile=$profile]`n$cleaned"
+
+$response = @{
+    modifiedResult = @{
+        resultType       = 'success'
+        textResultForLlm = $finalText
+    }
+} | ConvertTo-Json -Depth 5 -Compress
+
+Write-Output $response

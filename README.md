@@ -105,12 +105,20 @@ also get funneled automatically.
 Quick install:
 
 ```bash
-# Claude Code + VSCode Copilot Chat (one hook, both hosts):
-./integrations/claude-code/install.sh --auto-update-settings
-
-# GitHub Copilot CLI (true universal interception):
-./integrations/copilot-cli/install.sh
+# macOS / Linux / Git Bash:
+./integrations/claude-code/install.sh --auto-update-settings   # Claude Code + VSCode Copilot Chat
+./integrations/copilot-cli/install.sh                          # Copilot CLI universal interception
 ```
+
+```powershell
+# Windows PowerShell:
+.\integrations\claude-code\install.ps1 -AutoUpdateSettings
+.\integrations\copilot-cli\install.ps1
+```
+
+The hooks ship with both bash and PowerShell ports. Windows installs auto-defer
+to Git Bash if it's on PATH and fall back to native PowerShell otherwise — one
+config, any platform.
 
 See [integrations/README.md](./integrations/README.md) for the full
 capability matrix and per-host install docs.
@@ -124,11 +132,22 @@ sees it.
 
 #### 1. Install the GitHub Copilot CLI
 
+**macOS / Linux:**
+
 ```bash
 brew install gh
 gh auth login                          # GitHub auth + Copilot subscription
 gh extension install github/copilot-cli  # or: npm i -g @github/copilot-cli
 copilot --version                      # confirm ≥ 1.0
+```
+
+**Windows** (PowerShell):
+
+```powershell
+winget install GitHub.cli           # or: scoop install gh
+gh auth login
+gh extension install github/copilot-cli
+copilot --version
 ```
 
 If `copilot` isn't on your PATH after `npm` install, add `$(npm prefix -g)/bin`
@@ -149,23 +168,37 @@ coagula --help
 ```
 
 You also need `jq` (the hook uses it to parse the JSON Copilot CLI streams
-in):
+in — required for the bash path; the PowerShell path doesn't need it):
 
 ```bash
-brew install jq
+brew install jq            # macOS
+sudo apt install jq        # Debian/Ubuntu
+winget install jqlang.jq   # Windows (only if using Git Bash)
 ```
 
 #### 3. Install both hooks
 
 From inside the `coagula` repo:
 
+**macOS / Linux / Git Bash:**
+
 ```bash
 ./integrations/copilot-cli/install.sh
 ```
 
-This copies the two hook scripts to `~/.copilot/hooks-bin/` and writes
-`~/.copilot/hooks/coagula.json` wiring them to `preToolUse` and
-`postToolUse`. Re-run with `--force` to overwrite an existing config.
+**Windows PowerShell:**
+
+```powershell
+.\integrations\copilot-cli\install.ps1
+```
+
+Either installer copies the hook scripts to `~/.copilot/hooks-bin/` and
+writes `~/.copilot/hooks/coagula.json` with **both** `bash` and `powershell`
+command fields — Copilot CLI auto-picks per platform, and the PowerShell
+hooks themselves further auto-defer to Git Bash if it's on PATH. So a
+single config works on macOS, Linux, Windows native, and Windows + Git
+Bash. Re-run with `--force` (or `-Force` in PS) to overwrite an existing
+config.
 
 #### 4. Verify the hooks fire
 
@@ -188,7 +221,9 @@ Troubleshooting below.
 
 #### 5. (Optional) Tune for your workflow
 
-All optional. Set in `~/.zshrc` / `~/.bashrc` (or per session):
+All optional.
+
+macOS / Linux (set in `~/.zshrc` / `~/.bashrc`):
 
 ```bash
 export COAGULA_QUERY="default query"        # overrides per-session inference
@@ -200,6 +235,16 @@ export COAGULA_SKIP_TOOLS="my_internal_tool"     # extra postToolUse tools to by
 
 # Kill switch:
 export COAGULA_DISABLE=1
+```
+
+Windows PowerShell (`$PROFILE` or per-session):
+
+```powershell
+$env:COAGULA_QUERY      = "default query"
+$env:COAGULA_BUDGET     = 2000
+$env:COAGULA_KEEP       = 5
+$env:COAGULA_THRESHOLD  = 2000
+$env:COAGULA_DISABLE    = 1   # kill switch
 ```
 
 For per-task queries that improve relevance ranking on specific commands,

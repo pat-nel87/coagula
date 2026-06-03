@@ -13,8 +13,10 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SRC="$SCRIPT_DIR/coagula-bash-hook.sh"
+SRC_PS="$SCRIPT_DIR/coagula-bash-hook.ps1"
 DEST_DIR="$HOME/.claude"
 DEST="$DEST_DIR/coagula-bash-hook.sh"
+DEST_PS="$DEST_DIR/coagula-bash-hook.ps1"
 SETTINGS="$DEST_DIR/settings.json"
 
 auto_update=0
@@ -38,6 +40,13 @@ mkdir -p "$DEST_DIR"
 cp "$SRC" "$DEST"
 chmod +x "$DEST"
 echo "Installed hook → $DEST"
+
+# Also stage the .ps1 sibling so the script is portable to Windows users
+# whose ~/.claude/ may have been copied across machines.
+if [[ -f "$SRC_PS" ]]; then
+  cp "$SRC_PS" "$DEST_PS"
+  echo "Bundled PowerShell port → $DEST_PS"
+fi
 
 snippet=$(cat <<EOF
 {

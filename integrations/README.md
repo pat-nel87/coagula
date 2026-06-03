@@ -42,6 +42,20 @@ equivalent." Both were wrong:
 Both pieces of info post-dated the model's training cutoff; the corrected
 matrix above is now built and tested.
 
+## Cross-platform support
+
+All hooks ship in two variants:
+
+- `coagula-*.sh` (bash) — used on macOS, Linux, Git Bash on Windows
+- `coagula-*.ps1` (PowerShell) — used on Windows PowerShell, with auto-defer
+  to Git Bash if it's on PATH (so the bash impl stays the single source of
+  truth when both are available)
+
+Installer scripts write hook configs with **both** `bash` and `powershell`
+command fields, and the Copilot CLI / Claude Code hosts pick the right one
+per-platform automatically. The same config works on macOS, Linux, Windows
+native, and Windows + Git Bash.
+
 ## Recommended setup
 
 For maximum coverage:
@@ -49,13 +63,19 @@ For maximum coverage:
 1. Install the Claude Code bridge → covers Claude Code Bash + VSCode
    Copilot Chat Bash (same hook script, both hosts pick it up):
    ```bash
-   ./integrations/claude-code/install.sh --auto-update-settings
+   ./integrations/claude-code/install.sh --auto-update-settings    # macOS / Linux / Git Bash
+   ```
+   ```powershell
+   .\integrations\claude-code\install.ps1 -AutoUpdateSettings      # Windows PowerShell
    ```
 
 2. Install the Copilot CLI bridge → adds true universal interception for
    Copilot CLI sessions:
    ```bash
-   ./integrations/copilot-cli/install.sh
+   ./integrations/copilot-cli/install.sh                           # macOS / Linux / Git Bash
+   ```
+   ```powershell
+   .\integrations\copilot-cli\install.ps1                          # Windows PowerShell
    ```
 
 3. Cross-host MCP fallback → `pip install "coagula[mcp]"` then
