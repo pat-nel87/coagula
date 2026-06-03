@@ -1,0 +1,89 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "payments-7c9d8f4b6-abcde",
+    "namespace": "prod",
+    "uid": "9f2e0b1c-1234-5678-9abc-def012345678",
+    "resourceVersion": "8472103",
+    "generation": 4,
+    "creationTimestamp": "2026-01-14T08:31:22Z",
+    "selfLink": "/api/v1/namespaces/prod/pods/payments-7c9d8f4b6-abcde",
+    "labels": {
+      "app": "payments",
+      "pod-template-hash": "7c9d8f4b6",
+      "version": "v3.2.1",
+      "tier": "backend",
+      "managed-by": "argocd"
+    },
+    "annotations": {
+      "cni.projectcalico.org/podIP": "10.244.3.17/32",
+      "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"v1\",\"kind\":\"Pod\"...truncated for brevity...}",
+      "sidecar.istio.io/status": "{\"version\":\"abc123\",\"initContainers\":[\"istio-init\"]}",
+      "checksum/config": "9f8e7d6c5b4a3928171605040302010fedc"
+    },
+    "ownerReferences": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "name": "payments-7c9d8f4b6",
+        "uid": "11112222-3333-4444-5555-666677778888",
+        "controller": true,
+        "blockOwnerDeletion": true
+      }
+    ],
+    "finalizers": ["foregroundDeletion"],
+    "managedFields": [
+      {
+        "manager": "kube-controller-manager",
+        "operation": "Update",
+        "apiVersion": "v1",
+        "time": "2026-01-14T08:31:22Z",
+        "fieldsType": "FieldsV1",
+        "fieldsV1": {
+          "f:metadata": {"f:ownerReferences": {".": {}}},
+          "f:spec": {"f:containers": {"k:{\"name\":\"payments\"}": {".": {}}}}
+        }
+      },
+      {
+        "manager": "kubelet",
+        "operation": "Update",
+        "apiVersion": "v1",
+        "time": "2026-01-15T12:00:01Z",
+        "fieldsType": "FieldsV1",
+        "fieldsV1": {"f:status": {"f:conditions": {}}}
+      }
+    ]
+  },
+  "spec": {
+    "containers": [
+      {
+        "name": "payments",
+        "image": "registry.example.com/payments:v3.2.1",
+        "ports": [{"containerPort": 8080}]
+      }
+    ]
+  },
+  "status": {
+    "phase": "Running",
+    "conditions": [
+      {"type": "PodScheduled", "status": "True", "lastTransitionTime": "2026-01-14T08:31:23Z"},
+      {"type": "Initialized", "status": "True", "lastTransitionTime": "2026-01-14T08:31:25Z"},
+      {"type": "ContainersReady", "status": "False", "lastTransitionTime": "2026-01-15T12:00:01Z"},
+      {"type": "Ready", "status": "False", "lastTransitionTime": "2026-01-15T12:00:01Z"}
+    ],
+    "containerStatuses": [
+      {
+        "name": "payments",
+        "ready": false,
+        "restartCount": 42,
+        "state": {
+          "waiting": {
+            "reason": "CrashLoopBackOff",
+            "message": "back-off 5m0s restarting failed container=payments pod=payments-7c9d8f4b6-abcde_prod"
+          }
+        }
+      }
+    ]
+  }
+}
