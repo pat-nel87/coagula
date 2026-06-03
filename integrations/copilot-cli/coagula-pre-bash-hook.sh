@@ -40,7 +40,12 @@ command -v coagula >/dev/null 2>&1 || { echo "$allow_passthrough"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "$allow_passthrough"; exit 0; }
 
 tool_name=$(printf '%s' "$input" | jq -r '.toolName // empty')
-[[ "$tool_name" != "bash" ]] && { echo "$allow_passthrough"; exit 0; }
+# Accept shell-family toolNames across platforms: bash (macOS/Linux),
+# powershell (Windows Copilot CLI). shell kept for forward compat.
+case "$tool_name" in
+  bash|shell|powershell) ;;
+  *) echo "$allow_passthrough"; exit 0 ;;
+esac
 
 # Pull the command from toolArgs. In Copilot CLI preToolUse, toolArgs is a
 # JSON string; in postToolUse it's an object. Handle both.

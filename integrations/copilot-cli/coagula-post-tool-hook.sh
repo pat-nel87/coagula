@@ -81,21 +81,25 @@ fi
 # Derive query — empty means lite mode (no Relevance/Summarize).
 query="${COAGULA_QUERY:-${COAGULA_TASK:-}}"
 
-# Auto-detect profile from the tool / command.
+# Auto-detect profile from the tool / command. Match the pre-tool
+# hook's shell-family allowlist so Windows kubectl/az/psql output gets
+# the right denylist instead of falling back to passthrough.
 profile="passthrough"
-if [[ "$tool_name" == "bash" ]]; then
-  # toolArgs may be either a JSON string or an object. Normalize.
-  command_str=$(printf '%s' "$input" \
-    | jq -r 'if (.toolArgs | type) == "string"
-             then (.toolArgs | fromjson | .command // "")
-             else .toolArgs.command // ""
-             end')
-  case "$command_str" in
-    kubectl*|oc*|helm*)        profile="k8s" ;;
-    psql*|mysql*|sqlite3*)     profile="postgres" ;;
-    az*|gcloud*|aws*)          profile="azure" ;;
-  esac
-fi
+case "$tool_name" in
+  bash|shell|powershell)
+    # toolArgs may be either a JSON string or an object. Normalize.
+    command_str=$(printf '%s' "$input" \
+      | jq -r 'if (.toolArgs | type) == "string"
+               then (.toolArgs | fromjson | .command // "")
+               else .toolArgs.command // ""
+               end')
+    case "$command_str" in
+      kubectl*|oc*|helm*)        profile="k8s" ;;
+      psql*|mysql*|sqlite3*)     profile="postgres" ;;
+      az*|gcloud*|aws*)          profile="azure" ;;
+    esac
+    ;;
+esac
 
 budget="${COAGULA_BUDGET:-2000}"
 keep="${COAGULA_KEEP:-5}"

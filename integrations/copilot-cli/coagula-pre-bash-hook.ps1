@@ -56,7 +56,9 @@ try {
     Out-Passthrough
 }
 
-if ([string]$payload.toolName -ne 'bash') { Out-Passthrough }
+# Accept shell-family toolNames across platforms: 'bash' (macOS/Linux),
+# 'powershell' (Windows Copilot CLI). 'shell' kept for forward compat.
+if (@('bash','shell','powershell') -notcontains [string]$payload.toolName) { Out-Passthrough }
 
 # toolArgs is a JSON string in preToolUse (per empirical probe of Copilot CLI).
 $argsObj = $null
@@ -114,8 +116,14 @@ $newArgs.command = $rewritten
 
 # Debug log — append-only, transform-only entries. See post-tool hook
 # for env var details.
-$logPath = if ($env:COAGULA_DEBUG_LOG) { $env:COAGULA_DEBUG_LOG } `
-           else { Join-Path $env:USERPROFILE '.copilot\coagula-debug.log' }
+$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { '' }
+$logPath = if ($env:COAGULA_DEBUG_LOG) {
+    $env:COAGULA_DEBUG_LOG
+} elseif ($homeDir) {
+    Join-Path $homeDir '.copilot/coagula-debug.log'
+} else {
+    ''
+}
 if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
     $msg = "$(Get-Date -Format 'o') [pre-bash] rewrote (profile=$profile): $command"
     Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue

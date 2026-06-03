@@ -186,6 +186,54 @@ jobs:
             Write-Host "FAIL: Invoke-WebRequest not rewritten: $($obj | ConvertTo-Json -Compress)"; exit 1
           }
           Write-Host "PASS: Invoke-WebRequest rewritten with --query"
+      - name: preToolUse — toolName='powershell' (Windows Copilot CLI) should rewrite
+        shell: pwsh
+        run: |
+          # Regression for v0.3.6: Windows Copilot CLI emits toolName='powershell'
+          # for shell calls, not 'bash'. v0.3.5 hardcoded toolName=='bash' so the
+          # pre-tool hook never fired on Windows.
+          $payload = '{"sessionId":"x","timestamp":1,"cwd":"/tmp","toolName":"powershell","toolArgs":"{\"command\":\"kubectl get pod -o json\"}"}'
+          $env:COAGULA_QUERY = "why is pod crashing"
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          $cmd = $obj.modifiedArgs.command
+          if (-not $cmd -or $cmd -notmatch 'coagula --query.*--profile k8s') {
+            Write-Host "FAIL: toolName=powershell not rewritten with k8s profile: $($obj | ConvertTo-Json -Compress)"; exit 1
+          }
+          Write-Host "PASS: toolName=powershell rewritten with k8s profile"
+      - name: postToolUse — toolName='powershell' + kubectl should pick profile=k8s
+        shell: pwsh
+        run: |
+          # Sibling v0.3.6 fix: postToolUse profile auto-detection also gated
+          # on toolName=='bash'. On Windows kubectl calls were funneling with
+          # profile=passthrough instead of profile=k8s, losing the prune wins.
+          Move-Item integrations/copilot-cli/coagula-post-tool-hook.sh integrations/copilot-cli/coagula-post-tool-hook.sh.bak
+          try {
+            $big = (Get-Content -Raw tests/fixtures/kubectl_pod.json) * 20
+            $payload = @{
+              sessionId="x"; timestamp=1; cwd="/tmp"
+              toolName="powershell"
+              toolArgs=@{ command="kubectl get pod my-pod -o json" }
+              toolResult=@{ resultType="success"; textResultForLlm=$big }
+            } | ConvertTo-Json -Depth 6 -Compress
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-post-tool-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-post-tool-hook.sh.bak integrations/copilot-cli/coagula-post-tool-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          $cleaned = $obj.modifiedResult.textResultForLlm
+          if (-not $cleaned) { Write-Host "FAIL: no modifiedResult"; exit 1 }
+          if ($cleaned -notmatch 'profile=k8s') {
+            Write-Host "FAIL: profile=k8s not selected. First 200 chars: $($cleaned.Substring(0, [Math]::Min(200,$cleaned.Length)))"
+            exit 1
+          }
+          Write-Host "PASS: toolName=powershell selected profile=k8s"
+
       - name: preToolUse — case-insensitive (INVOKE-RESTMETHOD) should be rewritten
         shell: pwsh
         run: |

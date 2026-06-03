@@ -118,9 +118,12 @@ if ($head -match '(?m)^### ') { Out-NoOp }
 $query = $env:COAGULA_QUERY
 if ([string]::IsNullOrEmpty($query)) { $query = $env:COAGULA_TASK }
 
-# Profile auto-detection (bash tool only — match the .sh logic).
+# Profile auto-detection for shell-family tools. Without this, Windows
+# `kubectl` calls (toolName='powershell') would funnel with the empty
+# passthrough denylist instead of the k8s denylist that does the actual
+# pruning work. Matches the pre-tool hook's toolName allowlist.
 $profile = 'passthrough'
-if ($toolName -eq 'bash') {
+if (@('bash','shell','powershell') -contains $toolName) {
     # toolArgs may be either a JSON string or a parsed object.
     $argsObj = $null
     if ($payload.toolArgs -is [string]) {
@@ -163,8 +166,14 @@ $finalText = "[coagula: $resultTokens -> $cleanedTokens tok | tool=$toolName pro
 # Debug log — append-only, transform-only entries. Disable with
 # COAGULA_DEBUG_LOG=off, override path with COAGULA_DEBUG_LOG=<path>.
 # Default: ~/.copilot/coagula-debug.log (silently no-ops if dir missing).
-$logPath = if ($env:COAGULA_DEBUG_LOG) { $env:COAGULA_DEBUG_LOG } `
-           else { Join-Path $env:USERPROFILE '.copilot\coagula-debug.log' }
+$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { '' }
+$logPath = if ($env:COAGULA_DEBUG_LOG) {
+    $env:COAGULA_DEBUG_LOG
+} elseif ($homeDir) {
+    Join-Path $homeDir '.copilot/coagula-debug.log'
+} else {
+    ''
+}
 if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
     $msg = "$(Get-Date -Format 'o') [post-tool] funneled (tool=$toolName profile=$profile): $resultTokens -> $cleanedTokens tok"
     Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue

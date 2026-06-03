@@ -130,8 +130,14 @@ if ([string]::IsNullOrEmpty($query)) {
 # Debug log — transform-only. Default ~/.copilot/coagula-debug.log; the
 # claude-code hook logs to the same file so all hook activity is in one
 # tail. Override path with COAGULA_DEBUG_LOG=<path>, disable with =off.
-$logPath = if ($env:COAGULA_DEBUG_LOG) { $env:COAGULA_DEBUG_LOG } `
-           else { Join-Path $env:USERPROFILE '.copilot\coagula-debug.log' }
+$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { '' }
+$logPath = if ($env:COAGULA_DEBUG_LOG) {
+    $env:COAGULA_DEBUG_LOG
+} elseif ($homeDir) {
+    Join-Path $homeDir '.copilot/coagula-debug.log'
+} else {
+    ''
+}
 if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
     $msg = "$(Get-Date -Format 'o') [claude-pre-bash] rewrote (profile=$profile): $command"
     Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue
