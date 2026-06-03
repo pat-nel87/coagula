@@ -494,14 +494,19 @@ The `LLM_DEPLOYMENT` is required for the funnel to wire Azure; the
 `EMBED_DEPLOYMENT` is optional — without it, `Relevance` keeps its TF-IDF
 fallback.
 
-**Cost arithmetic** on the SPEC §11 noisy_mixed scenario (135k tokens in,
-the worst case):
+**Cost shape** on the SPEC §11 noisy_mixed scenario (135k input tokens
+reduces to ~700 output tokens):
 
 | Stage | Token cost | Where |
 |---|---|---|
 | Normalize / Dedup / Prune (lossless) | $0 | deterministic, stdlib |
-| Relevance + Summarize via `gpt-5.4-nano` / `gpt-4o-mini` | ~$0.0002 | Azure |
-| Frontier model (Claude / GPT-4) sees | ~700 tokens | huge savings |
+| Relevance + Summarize via Azure deployment | depends on rate × the ~1.3k tokens reaching Summarize | Azure |
+| Frontier model (Claude / GPT-4) input | ~700 tokens of cleaned context | the actual win |
+
+The Azure-tier cost per session is small relative to the frontier-model
+input savings, but exact dollar figures depend on your deployment's
+per-million-token rate. Measure before committing to a budget — see the
+"Why this matters now" note about benchmark numbers being TBD.
 
 **Library usage** (without the MCP server):
 
