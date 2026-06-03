@@ -1,8 +1,15 @@
 # Claude Code hook bridge
 
 A `PreToolUse` hook that automatically pipes noisy diagnostic Bash output
-through `coagula` *before* it lands in Claude's context. This is the closest
-thing to a true context interceptor that Claude Code's hook system allows.
+through `coagula` *before* it lands in Claude's context.
+
+Claude Code's hook system can only modify tool *input* (via `updatedInput`)
+— `PostToolUse` is read-only. So this hook covers Bash command rewriting
+but not Read/Edit/MCP-result interception. If you want true universal
+interception, GitHub Copilot CLI is currently the only host that supports
+it (see [`integrations/copilot-cli/`](../copilot-cli/)). This Claude Code
+hook is the best available there until / unless the spec adds a
+`modifiedResult`-equivalent.
 
 ## What it does
 
@@ -106,19 +113,16 @@ rm ~/.claude/coagula-bash-hook.sh
 # references coagula-bash-hook.sh.
 ```
 
-## Comparable hooks in other hosts?
+## Comparable hooks in other hosts
 
-Short version: **no, nothing equivalent exists today** (June 2026).
+| Host | PreToolUse modify input | PostToolUse modify output | Coverage |
+|---|:-:|:-:|---|
+| Claude Code (here) | ✅ `updatedInput` | ❌ | Bash only |
+| VSCode + Copilot Chat (agent mode, Preview) | ✅ `updatedInput` (reuses this hook via `.claude/settings.json`) | ❌ | Bash only |
+| **GitHub Copilot CLI ≥ 1.0 (Preview)** | ✅ `modifiedArgs` | ✅ **`modifiedResult`** | **Universal (any tool)** |
 
-- **VSCode + GitHub Copilot Chat (1.99+):** Supports MCP servers (the
-  `coagula-mcp` server works there) but has no pre-/post-tool-call hook
-  API. The closest workaround is a `.github/copilot-instructions.md` rule
-  telling Copilot to call `coagula.manicure` first. Soft enforcement; the
-  model may ignore it.
-- **GitHub Copilot CLI (`gh copilot`):** No tools, no MCP, no plugin model.
-  Integration is shell composition only: pipe its output through `coagula`
-  manually.
-
-The `coagula-mcp` server is the cross-host fallback — it gives every
-MCP-aware client (Claude Code, Claude Desktop, VSCode Copilot) the `manicure`
-+ `retrieve` tools. Less seamless than this hook, but works everywhere.
+If you want interception on Read / Edit / MCP-tool results too, install the
+Copilot CLI bridge instead/in addition: see
+[`integrations/copilot-cli/`](../copilot-cli/). Earlier docs claimed no
+equivalents existed in those hosts — that was wrong; the corrected matrix
+above is what's actually shipped and verified locally.

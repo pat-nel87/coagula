@@ -1,0 +1,17 @@
+{
+  "_comment": "Drop this at .github/hooks/coagula.json in your repo to enable the coagula Bash interceptor for VSCode Copilot Chat agent mode. After cloning, edit the absolute path below to point at your installed hook script (default install puts it in ~/.claude/coagula-bash-hook.sh — same script the Claude Code bridge uses).",
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOME}/.claude/coagula-bash-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -86,23 +86,34 @@ In your user `settings.json`:
 (Replace the key with whatever your Copilot version expects; the SDK transport
 is stdio either way.)
 
-### Automatic interception in Claude Code (the closest thing to a true interceptor)
+### Automatic interception via host hooks
 
-Claude Code's `PreToolUse` hook can rewrite Bash commands *before* they run.
-The `integrations/claude-code/` hook auto-pipes noisy commands (`kubectl`,
-`psql`, `az`, `gcloud`, `journalctl`, etc.) through `coagula` so the model
-never sees the raw output:
+All three major coding-agent hosts now support tool hooks that can transform
+tool calls before/after they reach the model. Coverage per host:
+
+| Host | Hook integration | What gets intercepted |
+|---|---|---|
+| **GitHub Copilot CLI** ≥ 1.0 | [`integrations/copilot-cli/`](./integrations/copilot-cli/) | **Universal** — Bash + view + MCP tool results via `modifiedResult` |
+| Claude Code | [`integrations/claude-code/`](./integrations/claude-code/) | Bash only — `updatedInput` rewrites commands before they run |
+| VSCode + Copilot Chat (agent mode) | [`integrations/vscode-copilot/`](./integrations/vscode-copilot/) — reuses the Claude Code hook (VSCode reads `.claude/settings.json`) | Bash only |
+
+GitHub Copilot CLI is currently the only host that supports modifying tool
+*output* (`postToolUse.modifiedResult`), which makes it the only place
+where reads of huge files, MCP tool blobs, and arbitrary non-Bash tools
+also get funneled automatically.
+
+Quick install:
 
 ```bash
-./integrations/claude-code/install.sh
-# or, to also patch ~/.claude/settings.json automatically:
+# Claude Code + VSCode Copilot Chat (one hook, both hosts):
 ./integrations/claude-code/install.sh --auto-update-settings
+
+# GitHub Copilot CLI (true universal interception):
+./integrations/copilot-cli/install.sh
 ```
 
-See [integrations/claude-code/README.md](./integrations/claude-code/README.md)
-for the full docs, env knobs, and limitations. No equivalent host-level hook
-exists for VSCode Copilot or Copilot CLI today — use the `coagula-mcp`
-server or instruction-level guidance there.
+See [integrations/README.md](./integrations/README.md) for the full
+capability matrix and per-host install docs.
 
 ### Optional: enable Ollama for better ranking + abstractive summarization
 
@@ -158,9 +169,10 @@ See `SPEC.md` for the full contract.
 
 ## What this isn't
 
-- **Not an automatic interceptor.** MCP tools are LLM-invoked. coagula
-  doesn't see context the LLM doesn't ask it to see. For true automatic
-  interception you'd want a Claude Code hook (separate project).
+- **Not an automatic interceptor when used purely as an MCP server.** MCP
+  tools are LLM-invoked. For automatic interception (no model effort),
+  use the host hooks under `integrations/` — GitHub Copilot CLI gets
+  universal coverage; Claude Code and VSCode Copilot Chat get Bash-only.
 - **Not a vector DB / RAG store.** The funnel is stateless per request
   except for the per-request deferred store.
 - **No telemetry, no network egress on the default path.** Ollama is local;
