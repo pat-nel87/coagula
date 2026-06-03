@@ -10,20 +10,23 @@ Postgres stats, Azure ARM responses) but works on any context.
 
 ## Status
 
-**v0.2.0 — M5 complete.** Seven-stage funnel, CLI, Ollama hooks, MCP adapter
-library, and a standalone MCP server (`coagula-mcp`) usable from Claude Code,
-Claude Desktop, and VSCode 1.99+ with GitHub Copilot. Runs on the standard
-library alone; Ollama and MCP SDK are optional extras. ≥99% token reduction
-on the SPEC §11 acceptance scenario with the FATAL signal always preserved.
+**v0.3.0** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
+MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
+1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
+interception via PowerShell/Bash host hooks). Optional cheap-inference
+backends: **Azure OpenAI** (e.g. `gpt-5.4-nano`) and **Ollama** (local).
+Runs on the standard library alone — both backends and the MCP SDK are
+optional extras. ≥99% token reduction on the SPEC §11 acceptance scenario
+with the FATAL signal always preserved.
 
 ## Install
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.2.0/coagula-0.2.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.0/coagula-0.3.0-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.2.0/coagula-0.2.0-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.0/coagula-0.3.0-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula
@@ -43,7 +46,7 @@ python -m coagula.cli \
 kubectl get pod <name> -o json | coagula --query "why is this pod failing" --report
 ```
 
-## Use as an MCP server (Claude Code / Desktop / VSCode Copilot)
+## Use as an MCP server (Claude Code / Desktop / VSCode Copilot / Copilot CLI)
 
 The `coagula-mcp` console script speaks MCP over stdio. Register it once and
 the LLM gets two tools: `manicure` (trim a payload) and `retrieve` (pull
@@ -85,6 +88,26 @@ In your user `settings.json`:
 
 (Replace the key with whatever your Copilot version expects; the SDK transport
 is stdio either way.)
+
+### GitHub Copilot CLI
+
+Add via the interactive `/mcp add` slash command inside a `copilot` session,
+or edit `~/.copilot/mcp-config.json` directly:
+
+```json
+{
+  "servers": {
+    "coagula": {
+      "command": "coagula-mcp"
+    }
+  }
+}
+```
+
+Verify with `/mcp show`. Note that Copilot CLI ALSO supports
+[host hooks](#automatic-interception-via-host-hooks), which give true
+automatic interception — that's usually the better integration path for
+Copilot CLI users. The MCP server is for explicit, LLM-invoked funneling.
 
 ### Automatic interception via host hooks
 
@@ -288,20 +311,80 @@ Verify with `/mcp show` inside an interactive `copilot` session.
   `COAGULA_QUERY` to be specific so the funneled result actually contains
   the signal the model is after.
 
-### Optional: enable Ollama for better ranking + abstractive summarization
+### Optional: route the funnel's embed + summarize tier through a cheap model
+
+By default `coagula`'s `Relevance` stage uses TF-IDF and `Summarize` is
+extractive — both stdlib, no model call. For better quality on noisy
+diagnostic payloads, route those two stages through a cheaper-than-frontier
+LLM. `coagula-mcp` auto-detects the configured backend at startup with this
+priority: **`COAGULA_BACKEND` override → Azure OpenAI → Ollama → stdlib
+fallback**.
+
+#### Azure OpenAI (cheap before the frontier model)
+
+Designed for the "cheap private compression before Claude / GPT-4" pattern.
+Set the env vars before starting `copilot` (or any MCP-host) and the funnel
+routes through your Azure deployment:
+
+```powershell
+# Windows PowerShell — same names work in bash via `export`:
+$env:AZURE_OPENAI_ENDPOINT         = "https://my-resource.openai.azure.com"
+$env:AZURE_OPENAI_API_KEY          = "..."
+$env:AZURE_OPENAI_LLM_DEPLOYMENT   = "gpt-5.4-nano"           # or gpt-4o-mini
+$env:AZURE_OPENAI_EMBED_DEPLOYMENT = "text-embedding-3-small" # optional
+$env:AZURE_OPENAI_API_VERSION      = "2024-10-21"             # optional
+```
+
+The `LLM_DEPLOYMENT` is required for the funnel to wire Azure; the
+`EMBED_DEPLOYMENT` is optional — without it, `Relevance` keeps its TF-IDF
+fallback.
+
+**Cost arithmetic** on the SPEC §11 noisy_mixed scenario (135k tokens in,
+the worst case):
+
+| Stage | Token cost | Where |
+|---|---|---|
+| Normalize / Dedup / Prune (lossless) | $0 | deterministic, stdlib |
+| Relevance + Summarize via `gpt-5.4-nano` / `gpt-4o-mini` | ~$0.0002 | Azure |
+| Frontier model (Claude / GPT-4) sees | ~700 tokens | huge savings |
+
+**Library usage** (without the MCP server):
+
+```python
+from coagula import default_funnel
+from coagula.models.azure_openai import make_embedder, make_llm
+
+embed = make_embedder("text-embedding-3-small",
+                      endpoint="https://my-resource.openai.azure.com",
+                      api_key=os.environ["AZURE_OPENAI_API_KEY"])
+llm   = make_llm("gpt-5.4-nano",
+                 endpoint="https://my-resource.openai.azure.com",
+                 api_key=os.environ["AZURE_OPENAI_API_KEY"])
+funnel = default_funnel(embedder=embed, llm=llm, max_tokens=2000, keep=5)
+```
+
+Both factories accept a `fallback` callable that fires on Azure errors (401,
+timeout, missing deployment) so a transient Azure outage degrades to TF-IDF
+rather than crashing the funnel.
+
+#### Ollama (local + offline)
 
 ```bash
-# Install Ollama (macOS):
+# Install (macOS):
 brew install --cask ollama-app
 open -a Ollama
 ollama pull nomic-embed-text llama3.2:3b
 
-# The coagula-mcp server will auto-detect Ollama and wire it in.
-# Override defaults with env vars:
+# The coagula-mcp server auto-detects Ollama and wires it in.
+# Override defaults:
 #   OLLAMA_HOST=http://localhost:11434
 #   COAGULA_EMBED_MODEL=nomic-embed-text
 #   COAGULA_LLM_MODEL=llama3.2:3b
 ```
+
+Auto-detection picks **Azure first** when both Azure env vars and a reachable
+Ollama are present. Force a specific backend with `COAGULA_BACKEND=azure`,
+`ollama`, or `fallback`.
 
 ## Use as a library (embed in your own MCP tool)
 

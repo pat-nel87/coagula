@@ -7,6 +7,14 @@ They are strictly optional — the funnel runs on stdlib alone.
 
 from __future__ import annotations
 
+from . import azure_openai, ollama
 from .ollama import OllamaError, make_embedder, make_llm, ping
 
-__all__ = ["OllamaError", "make_embedder", "make_llm", "ping"]
+__all__ = [
+    "OllamaError",
+    "azure_openai",
+    "make_embedder",
+    "make_llm",
+    "ollama",
+    "ping",
+]
