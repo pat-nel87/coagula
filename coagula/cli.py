@@ -86,10 +86,18 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     text = Path(args.path).read_text() if args.path else sys.stdin.read()
     chunks = chunk_text(text)
+    # Pick up Azure / Ollama from the environment — same priority as the
+    # MCP server. Critical for the Copilot CLI hook flow: the hook invokes
+    # this CLI on every noisy command, so the user's AZURE_OPENAI_* /
+    # OLLAMA_* env vars need to reach the funnel here too.
+    from .models import build_hooks_from_env
+    embedder, llm = build_hooks_from_env()
     funnel = default_funnel(
         max_tokens=args.budget,
         keep=args.keep,
         json_denylist=get_profile(args.profile),
+        embedder=embedder,
+        llm=llm,
     )
     out = funnel.run(chunks, args.query, args.budget)
     assembled = next((c for c in out if c.source == "assembled"), None)

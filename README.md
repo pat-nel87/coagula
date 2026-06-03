@@ -14,7 +14,7 @@ Postgres stats, Azure ARM responses) but works on any context.
 
 ## Status
 
-**v0.3.3** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
+**v0.3.4** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
 MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
 1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
 interception via PowerShell/Bash host hooks). Optional cheap-inference
@@ -27,10 +27,10 @@ with the FATAL signal always preserved.
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.3/coagula-0.3.3-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.4/coagula-0.3.4-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.3/coagula-0.3.3-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.4/coagula-0.3.4-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula
@@ -366,7 +366,10 @@ fallback**.
 
 Designed for the "cheap private compression before Claude / GPT-4" pattern.
 Set the env vars before starting `copilot` (or any MCP-host) and the funnel
-routes through your Azure deployment:
+routes through your Azure deployment. **Both the `coagula` CLI and the
+`coagula-mcp` server pick this up automatically** — so the Copilot CLI
+hook pipeline (which shells out to `coagula` on every noisy command) also
+goes through Azure once the env is set.
 
 ```powershell
 # Windows PowerShell — same names work in bash via `export`:
