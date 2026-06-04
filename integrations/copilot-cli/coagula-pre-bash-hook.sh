@@ -61,6 +61,14 @@ if printf '%s' "$command" | grep -qE '\| ?coagula( |$)'; then
   echo "$allow_passthrough"; exit 0
 fi
 
+# Copilot CLI persists original (un-modified) tool output to a spill
+# file (copilot-tool-output-*.txt). The model reads those when it wants
+# the full pre-funnel original — that's the documented escape hatch.
+# Re-funneling such a read would defeat the design.
+if printf '%s' "$command" | grep -qE 'copilot-tool-output-[A-Za-z0-9_-]+\.txt'; then
+  echo "$allow_passthrough"; exit 0
+fi
+
 # Built-in noisy-command pattern (matches the Claude Code hook).
 default_pattern='^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan)) '
 extra_pattern="${COAGULA_NOISY_PATTERNS:-}"
@@ -126,9 +134,9 @@ esac
 
 jq -nc \
   --argjson args "$new_args" \
-  --arg orig "$command" \
+  --arg prof "$profile" \
   '{
     permissionDecision: "allow",
     modifiedArgs: $args,
-    additionalContext: ("[coagula] funneled output of: " + $orig)
+    additionalContext: ("[coagula:pre-bash:" + $prof + "]")
   }'

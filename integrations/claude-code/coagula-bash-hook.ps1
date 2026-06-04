@@ -76,6 +76,9 @@ if ([string]::IsNullOrEmpty($command)) { Out-Silent }
 # Don't double-wrap.
 if ($command -match '\|\s?coagula(\s|$)') { Out-Silent }
 
+# Don't re-funnel reads of Copilot's spill files (escape hatch).
+if ($command -match 'copilot-tool-output-[\w-]+\.txt') { Out-Silent }
+
 $defaultPattern = '^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan))\s'
 $extraPattern   = $env:COAGULA_NOISY_PATTERNS
 
@@ -148,7 +151,7 @@ $response = @{
         hookEventName     = 'PreToolUse'
         permissionDecision = 'allow'
         updatedInput       = @{ command = $rewritten }
-        additionalContext  = "[coagula] funneled output of: $command"
+        additionalContext  = "[coagula:pre-bash:$profile]"
     }
 } | ConvertTo-Json -Depth 5 -Compress
 

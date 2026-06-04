@@ -146,18 +146,34 @@ $keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
 # Omit --query when empty so the CLI runs lite mode.
 try {
     if ([string]::IsNullOrEmpty($query)) {
-        $cleaned = $resultText | & coagula --profile $profile --budget $budget --keep $keep 2>$null
+        $cleanedRaw = $resultText | & coagula --profile $profile --budget $budget --keep $keep 2>$null
     } else {
-        $cleaned = $resultText | & coagula --query $query --profile $profile --budget $budget --keep $keep 2>$null
+        $cleanedRaw = $resultText | & coagula --query $query --profile $profile --budget $budget --keep $keep 2>$null
     }
     if ($LASTEXITCODE -ne 0) { Out-NoOp }
 } catch {
     Out-NoOp
 }
 
+# PowerShell captures multi-line external-command stdout as an
+# Object[] (one element per output line) — NOT as a single string.
+# Without an explicit -join, three things break together:
+#   1. `$cleaned.Length` returns line count, not char count → reported
+#      token counts are off by orders of magnitude (the "X -> 1 tok"
+#      log entries every Windows user has been seeing).
+#   2. `if ($cleaned.Length -ge $resultChars)` compares line-count to
+#      char-count → the not-actually-smaller guard never triggers, so
+#      garbled output always gets swapped in.
+#   3. `"[coagula: ...]`n$cleaned"` stringifies the array with SPACE
+#      separators, collapsing all the `### source\n\ncontent` newlines
+#      to spaces. The model sees structural headers inline with content.
+# The Bash version is fine — $(cmd) captures as a single string.
+# Always -join so downstream code works on real char counts and newlines.
+if ($null -eq $cleanedRaw) { Out-NoOp }
+$cleaned = if ($cleanedRaw -is [array]) { $cleanedRaw -join "`n" } else { [string]$cleanedRaw }
 if ([string]::IsNullOrEmpty($cleaned)) { Out-NoOp }
 
-# Skip the swap if not actually smaller.
+# Skip the swap if not actually smaller (in chars, not lines).
 if ($cleaned.Length -ge $resultChars) { Out-NoOp }
 
 $cleanedTokens = [int]($cleaned.Length / 4)

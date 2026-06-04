@@ -74,6 +74,10 @@ if ([string]::IsNullOrEmpty($command)) { Out-Passthrough }
 # Already piped through coagula? Don't double-wrap.
 if ($command -match '\|\s?coagula(\s|$)') { Out-Passthrough }
 
+# Don't re-funnel reads of Copilot's spill files — that's the escape
+# hatch the model uses to recover full pre-funnel output.
+if ($command -match 'copilot-tool-output-[\w-]+\.txt') { Out-Passthrough }
+
 # Match against built-in noisy command list.
 $defaultPattern = '^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan))\s'
 $extraPattern   = $env:COAGULA_NOISY_PATTERNS
@@ -144,7 +148,7 @@ if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
 $response = @{
     permissionDecision = 'allow'
     modifiedArgs       = $newArgs
-    additionalContext  = "[coagula] funneled output of: $command"
+    additionalContext  = "[coagula:pre-bash:$profile]"
 } | ConvertTo-Json -Depth 5 -Compress
 
 Write-Output $response

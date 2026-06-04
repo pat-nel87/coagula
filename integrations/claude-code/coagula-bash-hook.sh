@@ -63,6 +63,12 @@ if printf '%s' "$command" | grep -qE '\| ?coagula( |$)'; then
   exit 0
 fi
 
+# Don't re-funnel reads of coagula's own spill files (Claude Code +
+# Copilot CLI both persist original tool output to copilot-tool-output-*).
+if printf '%s' "$command" | grep -qE 'copilot-tool-output-[A-Za-z0-9_-]+\.txt'; then
+  exit 0
+fi
+
 # Match? Strip leading whitespace for the regex test.
 stripped=$(printf '%s' "$command" | sed 's/^[[:space:]]*//')
 matched=0
@@ -124,12 +130,12 @@ esac
 # Emit PreToolUse response with updatedInput.command.
 jq -nc \
   --arg cmd "$rewritten" \
-  --arg orig "$command" \
+  --arg prof "$profile" \
   '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
       updatedInput: { command: $cmd },
-      additionalContext: ("[coagula] funneled output of: " + $orig)
+      additionalContext: ("[coagula:pre-bash:" + $prof + "]")
     }
   }'

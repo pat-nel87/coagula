@@ -62,14 +62,14 @@ cleaner inputs to the model.
 **Install (Windows):**
 
 ```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.7/coagula-0.3.7-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.8/coagula-0.3.8-py3-none-any.whl
 .\integrations\copilot-cli\install.ps1
 ```
 
 **Install (macOS / Linux):**
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.7/coagula-0.3.7-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.8/coagula-0.3.8-py3-none-any.whl
 ./integrations/copilot-cli/install.sh
 ```
 
@@ -83,7 +83,7 @@ References:
 
 ## Status
 
-**v0.3.7** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
+**v0.3.8** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
 MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
 1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
 interception via PowerShell/Bash host hooks). Optional cheap-inference
@@ -96,10 +96,10 @@ with the FATAL signal always preserved.
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.7/coagula-0.3.7-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.8/coagula-0.3.8-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.7/coagula-0.3.7-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.8/coagula-0.3.8-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula

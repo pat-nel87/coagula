@@ -56,7 +56,12 @@ def chunk_text(text: str) -> list[Chunk]:
         if not block.strip():
             continue
         kind = detect_kind(block)
-        chunks.append(Chunk(text=block, kind=kind, source=f"input/{i}:{kind}"))
+        # Source format is short by design — it appears as `### {source}`
+        # in the assembled output, once per chunk. For SSE-shaped inputs
+        # that split into dozens of small chunks, every saved char compounds.
+        # Was `input/{i}:{kind}` (16+ chars); now `in/{i}` (5-6 chars).
+        # kind is preserved on the Chunk itself for stages that need it.
+        chunks.append(Chunk(text=block, kind=kind, source=f"in/{i}"))
     return chunks
 
 

@@ -238,6 +238,78 @@ jobs:
             exit 1
           }
           Write-Host "PASS: ;-chained PS command rewrites + parses ($cmd)"
+      - name: postToolUse — PS preserves newlines + reports plausible token count
+        shell: pwsh
+        run: |
+          # v0.3.8 regression for Bug 1: PowerShell captures multi-line
+          # stdout as Object[]. Without an explicit -join, downstream
+          # code computed token count from LINE count, the not-smaller
+          # guard never fired, and string concat collapsed `n separators
+          # to spaces (destroying the `### source` block structure).
+          # The fix joins the array right after coagula returns.
+          Move-Item integrations/copilot-cli/coagula-post-tool-hook.sh integrations/copilot-cli/coagula-post-tool-hook.sh.bak
+          try {
+            # Multi-line SSE-shaped input — exactly the field-test failure case.
+            $body = (1..400 | ForEach-Object {
+              '{"event":"data","seq":' + $_ + ',"payload":"' + ('x' * 25) + '"}'
+            }) -join "`n"
+            $payload = @{
+              sessionId="x"; timestamp=1; cwd="/tmp"
+              toolName="powershell"
+              toolArgs=@{ command="Get-Content somefile" }
+              toolResult=@{ resultType="success"; textResultForLlm=$body }
+            } | ConvertTo-Json -Depth 6 -Compress
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-post-tool-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-post-tool-hook.sh.bak integrations/copilot-cli/coagula-post-tool-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          $cleaned = $obj.modifiedResult.textResultForLlm
+          if (-not $cleaned) { Write-Host "FAIL: post-tool didn't fire"; exit 1 }
+          # Newlines must survive. Pre-fix this was 0.
+          $newlineCount = ([regex]::Matches($cleaned, "`n")).Count
+          if ($newlineCount -lt 10) {
+            Write-Host "FAIL: newlines stripped (array-vs-string bug); count=$newlineCount"
+            exit 1
+          }
+          # The header should report a plausible char/4 token count.
+          # Pre-fix this was line_count/4 (single digits).
+          if ($cleaned -match '\[coagula:\s*(\d+)\s*(?:->|→)\s*(\d+)\s*tok') {
+            $reported = [int]$matches[2]
+            if ($reported -lt 50) {
+              Write-Host "FAIL: header reports $reported tok (line-count-as-char-count bug); cleaned chars=$($cleaned.Length)"
+              exit 1
+            }
+            Write-Host "PASS: header reports $reported tok, $newlineCount newlines preserved"
+          } else {
+            Write-Host "FAIL: couldn't find [coagula: X -> Y tok] header in cleaned output"
+            Write-Host "First 200 chars: $($cleaned.Substring(0, [Math]::Min(200, $cleaned.Length)))"
+            exit 1
+          }
+      - name: preToolUse — spill-file reads pass through unchanged
+        shell: pwsh
+        run: |
+          # v0.3.8 fix for Issue 4: copilot-tool-output-*.txt is the
+          # escape hatch — Copilot persists pre-funnel output there for
+          # the model to read. Re-funneling those reads defeats the design.
+          $payload = '{"toolName":"powershell","toolArgs":"{\"command\":\"Get-Content C:\\\\Users\\\\j\\\\AppData\\\\Local\\\\Temp\\\\copilot-tool-output-1780533950567-k73z88.txt\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          if ($obj.modifiedArgs) {
+            Write-Host "FAIL: spill-file read was rewritten (defeats escape hatch)"
+            Write-Host "Got: $($obj | ConvertTo-Json -Compress)"
+            exit 1
+          }
+          if ($obj.permissionDecision -ne 'allow') {
+            Write-Host "FAIL: expected plain allow, got: $($obj | ConvertTo-Json -Compress)"
+            exit 1
+          }
+          Write-Host "PASS: spill-file read passes through unchanged"
       - name: preToolUse — bash toolName still uses subshell form (regression)
         shell: pwsh
         run: |
