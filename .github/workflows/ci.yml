@@ -286,6 +286,59 @@ jobs:
             Write-Host "First 200 chars: $($cleaned.Substring(0, [Math]::Min(200, $cleaned.Length)))"
             exit 1
           }
+      - name: preToolUse — shell-family toolName variants ALL rewrite
+        shell: pwsh
+        run: |
+          # v0.3.9 regression for Finding 1: Copilot CLI exposes a
+          # family of *_powershell tools (write_powershell, etc.) plus
+          # potential MCP-registered shell wrappers (mcp__svr__shell,
+          # mcp.acme.bash). The toolName regex now accepts any name
+          # ending in a known shell flavor with a recognized separator.
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          $shellVariants = @('bash','shell','powershell','write_powershell','mcp__svr__shell','mcp.acme.bash')
+          try {
+            foreach ($name in $shellVariants) {
+              $payload = '{"toolName":"' + $name + '","toolArgs":"{\"command\":\"curl https://example.com\"}"}'
+              $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+              $obj = $out | ConvertFrom-Json
+              if (-not $obj.modifiedArgs.command) {
+                Write-Host "FAIL: shell-family toolName '$name' was not rewritten"
+                Write-Host "Got: $($obj | ConvertTo-Json -Compress)"
+                exit 1
+              }
+              Write-Host "PASS: $name rewrote"
+            }
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+      - name: preToolUse — non-shell toolNames ALL pass through
+        shell: pwsh
+        run: |
+          # Companion: anything not matching the shell-family pattern
+          # must passthrough cleanly, even when the toolArgs include a
+          # bogus `command` field that would otherwise satisfy the
+          # noisy-pattern check.
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          $nonShellTools = @('view','web_fetch','grep','glob','session_store_sql','report_intent')
+          try {
+            foreach ($name in $nonShellTools) {
+              $payload = '{"toolName":"' + $name + '","toolArgs":"{\"command\":\"curl https://example.com\"}"}'
+              $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+              $obj = $out | ConvertFrom-Json
+              if ($obj.modifiedArgs) {
+                Write-Host "FAIL: non-shell toolName '$name' was wrongly rewritten"
+                Write-Host "Got: $($obj | ConvertTo-Json -Compress)"
+                exit 1
+              }
+              if ($obj.permissionDecision -ne 'allow') {
+                Write-Host "FAIL: non-shell toolName '$name' did not get plain allow"
+                exit 1
+              }
+              Write-Host "PASS: $name passed through"
+            }
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
       - name: preToolUse — spill-file reads pass through unchanged
         shell: pwsh
         run: |

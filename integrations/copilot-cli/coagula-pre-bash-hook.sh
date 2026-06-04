@@ -40,12 +40,15 @@ command -v coagula >/dev/null 2>&1 || { echo "$allow_passthrough"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "$allow_passthrough"; exit 0; }
 
 tool_name=$(printf '%s' "$input" | jq -r '.toolName // empty')
-# Accept shell-family toolNames across platforms: bash (macOS/Linux),
-# powershell (Windows Copilot CLI). shell kept for forward compat.
-case "$tool_name" in
-  bash|shell|powershell) ;;
-  *) echo "$allow_passthrough"; exit 0 ;;
-esac
+# Accept shell-family toolNames across platforms and wrappers:
+#   - bare:     bash / shell / powershell (native Copilot CLI tools)
+#   - prefixed: write_powershell, mcp__server__shell, mcp.acme.bash —
+#               any tool whose name ends in a known shell flavor.
+# The toolArgs `command` field check downstream is the second filter:
+# toolName looking shell-like without a command field still bails.
+if ! printf '%s' "$tool_name" | grep -qiE '(^|[_.-])(bash|shell|powershell|sh|zsh|fish)$'; then
+  echo "$allow_passthrough"; exit 0
+fi
 
 # Pull the command from toolArgs. In Copilot CLI preToolUse, toolArgs is a
 # JSON string; in postToolUse it's an object. Handle both.

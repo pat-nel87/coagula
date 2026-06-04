@@ -68,20 +68,41 @@ If you have only the pre hook: same as the Claude Code bridge — Bash-only.
 
 ## What gets the universal treatment (post hook)
 
-The post hook runs on the result of **every** tool except the
-always-skipped bookkeeping set:
+The post hook runs on the result of nearly every tool Copilot CLI
+dispatches `postToolUse` for, except the always-skipped bookkeeping set:
 
 ```
 report_intent  sql  todo_*  notification
 ```
 
-`bash`, `view`, file-fetch MCP tools, GitHub MCP server results, etc. —
-all eligible for funneling if they exceed `COAGULA_THRESHOLD`.
+`bash` / `powershell` / `view` / `read_powershell` / MCP tool results,
+GitHub MCP server results, etc. — all eligible for funneling if they
+exceed `COAGULA_THRESHOLD`.
 
-Profile auto-selection (post hook): for `bash` only, the leading command
-picks `--profile k8s|postgres|azure` per the same table as the pre hook.
-For other tools, profile is `passthrough` (denylist disabled; only
-dedup/relevance/summarize/budget apply).
+Profile auto-selection (post hook): for shell-family tools, the leading
+command picks `--profile k8s|postgres|azure` per the same table as the
+pre hook. For other tools, profile is `passthrough` (denylist disabled;
+only dedup/relevance/summarize/budget apply).
+
+### Known coverage gap — `web_fetch`
+
+As of Copilot CLI 1.0.59, the `web_fetch` tool's results do **not**
+trigger `postToolUse` dispatch. Confirmed empirically: in a captured
+`--log-level debug` session with 2 `web_fetch` calls and 33 other tool
+calls, exactly 33 post-tool hook executions appeared. The hook process
+is never spawned for `web_fetch` results — independent of any
+filtering coagula does internally.
+
+This means HTTP responses fetched via the `web_fetch` tool — often the
+largest single category by bytes in real diagnostic sessions — bypass
+the funnel entirely. coagula will compress them if you prompt the
+model to fetch via `Invoke-RestMethod` / `Invoke-WebRequest` / `curl`
+through the `powershell` tool instead, since those commands match the
+default noisy pattern (v0.3.3+) and pre-bash rewrites them in-pipeline.
+
+Tracking: the architectural fix lives upstream in `github/copilot-cli`
+— a hook-dispatch issue, not a coagula bug. We'll link the upstream
+issue here when it's filed.
 
 ## Idempotency
 

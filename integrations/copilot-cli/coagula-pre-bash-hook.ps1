@@ -56,9 +56,16 @@ try {
     Out-Passthrough
 }
 
-# Accept shell-family toolNames across platforms: 'bash' (macOS/Linux),
-# 'powershell' (Windows Copilot CLI). 'shell' kept for forward compat.
-if (@('bash','shell','powershell') -notcontains [string]$payload.toolName) { Out-Passthrough }
+# Accept shell-family toolNames across platforms and wrappers:
+#   - bare:     'bash' / 'shell' / 'powershell' (native Copilot CLI tools)
+#   - prefixed: 'write_powershell', 'mcp__server__shell', 'mcp.acme.bash',
+#               etc. — any tool whose name ends in a known shell flavor.
+# The toolArgs `command` check below acts as a second filter: if the
+# toolName looks shell-like but the args don't carry a `command` field
+# (e.g. read_powershell), the hook falls through to passthrough safely.
+$toolName = [string]$payload.toolName
+$shellNamePattern = '(?i)(^|[_.-])(bash|shell|powershell|sh|zsh|fish)$'
+if (-not ($toolName -match $shellNamePattern)) { Out-Passthrough }
 
 # toolArgs is a JSON string in preToolUse (per empirical probe of Copilot CLI).
 $argsObj = $null
