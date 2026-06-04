@@ -48,10 +48,17 @@ jobs:
       - name: Install GitHub Copilot CLI
         env:
           GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+        shell: bash
         run: |
+          # The GA'd Copilot CLI ships via npm, not `gh extension install`
+          # (which targets the legacy gh-copilot command-suggester product).
           gh --version
-          gh extension install github/copilot-cli
+          node --version
+          npm --version
+          npm install -g @github/copilot-cli
           copilot --version
+          # The CLI inherits gh's auth chain. Confirm token works.
+          gh auth status
 
       - name: Install minimal probe hook (POSIX)
         if: runner.os != 'Windows'
