@@ -45,19 +45,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GitHub Copilot CLI
+      - name: Install GitHub Copilot CLI (Linux/macOS)
+        if: runner.os != 'Windows'
         env:
           GH_TOKEN: ${{ secrets.COPILOT_PAT }}
         shell: bash
         run: |
-          # The GA'd Copilot CLI ships via npm, not `gh extension install`
-          # (which targets the legacy gh-copilot command-suggester product).
-          gh --version
-          node --version
-          npm --version
-          npm install -g @github/copilot-cli
+          # Per github/copilot-cli README: curl installer is the canonical
+          # path on Linux/macOS. Installs to $HOME/.local/bin when non-root.
+          curl -fsSL https://gh.io/copilot-install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
           copilot --version
-          # The CLI inherits gh's auth chain. Confirm token works.
+          gh auth status
+
+      - name: Install GitHub Copilot CLI (Windows)
+        if: runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+        shell: pwsh
+        run: |
+          # winget is the official Windows install per the upstream README.
+          winget install --id GitHub.Copilot `
+            --accept-source-agreements `
+            --accept-package-agreements `
+            --silent
+          # winget may install to a non-PATH location on agent; refresh and locate.
+          $copilotPath = (Get-Command copilot -ErrorAction SilentlyContinue).Source
+          if (-not $copilotPath) {
+            # Common winget install locations on hosted runners
+            $candidates = @(
+              "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GitHub.Copilot_*\copilot.exe",
+              "$env:ProgramFiles\GitHub\Copilot\copilot.exe"
+            )
+            foreach ($pat in $candidates) {
+              $found = Get-ChildItem -Path $pat -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) {
+                $dir = $found.Directory.FullName
+                Write-Host "Found copilot at $($found.FullName); adding $dir to PATH"
+                Add-Content -Path $env:GITHUB_PATH -Value $dir
+                $env:PATH = "$dir;$env:PATH"
+                break
+              }
+            }
+          }
+          copilot --version
           gh auth status
 
       - name: Install minimal probe hook (POSIX)
