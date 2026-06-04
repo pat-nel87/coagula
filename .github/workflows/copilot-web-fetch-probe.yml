@@ -1,0 +1,186 @@
+name: Copilot CLI web_fetch dispatch probe
+
+# Cross-platform probe for https://github.com/github/copilot-cli/issues/3665
+# (closed as completed, but a Windows field report showed web_fetch results
+# bypassing postToolUse dispatch in a real session).
+#
+# Runs a minimal session on windows / ubuntu / macos runners with an
+# identical probe hook installed, asks the model to use web_fetch + a
+# shell tool, and counts how many postToolUse dispatches each platform
+# produces per tool. If a platform shows 0 dispatches for web_fetch
+# while the others show 1+, that's empirical platform-conditional
+# behavior worth re-opening the issue with.
+#
+# Setup (one-time):
+# 1. Generate a GitHub PAT with Copilot access tied to a Copilot-licensed
+#    account (Settings → Developer settings → Personal access tokens).
+# 2. Add it as repo secret COPILOT_PAT (Settings → Secrets → Actions).
+# 3. Trigger this workflow manually (Actions tab → "Copilot CLI web_fetch
+#    dispatch probe" → "Run workflow").
+#
+# Each run consumes ~1-3 AI Credits per platform (~$0.03-0.09 total).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Prompt for the probe session (must induce web_fetch + a shell call)'
+        default: 'Use the web_fetch tool to fetch https://example.com and tell me what page it returns. Then run "echo probe done" via the bash or powershell tool. Do both.'
+        required: true
+      log_level:
+        description: 'Copilot CLI log level (debug captures the dispatch lines we want)'
+        default: 'debug'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GitHub Copilot CLI
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+        run: |
+          gh --version
+          gh extension install github/copilot-cli
+          copilot --version
+
+      - name: Install minimal probe hook (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p "$HOME/.copilot/hooks"
+          PROBE_DIR="$RUNNER_TEMP/probe"
+          mkdir -p "$PROBE_DIR"
+          PROBE_LOG="$PROBE_DIR/hook-fired.log"
+          cat > "$PROBE_DIR/probe.sh" <<'EOF'
+          #!/usr/bin/env bash
+          ts=$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Read stdin, extract toolName via jq (fall back to grep if jq missing)
+          if command -v jq >/dev/null 2>&1; then
+            payload=$(cat)
+            tool=$(printf '%s' "$payload" | jq -r '.toolName // "unknown"')
+          else
+            payload=$(cat)
+            tool=$(printf '%s' "$payload" | grep -oE '"toolName":\s*"[^"]+"' | sed 's/.*"\([^"]*\)"$/\1/')
+            [ -z "$tool" ] && tool="unknown"
+          fi
+          echo "$ts post-tool fired tool=$tool" >> "$1"
+          echo '{}'
+          EOF
+          chmod +x "$PROBE_DIR/probe.sh"
+          cat > "$HOME/.copilot/hooks/probe.json" <<EOF
+          {
+            "version": 1,
+            "hooks": {
+              "postToolUse": [
+                {"type": "command", "bash": "$PROBE_DIR/probe.sh $PROBE_LOG"}
+              ]
+            }
+          }
+          EOF
+          echo "PROBE_LOG=$PROBE_LOG" >> "$GITHUB_ENV"
+          : > "$PROBE_LOG"
+          echo "=== Hook config ==="
+          cat "$HOME/.copilot/hooks/probe.json"
+
+      - name: Install minimal probe hook (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.copilot\hooks" | Out-Null
+          $probeDir = Join-Path $env:RUNNER_TEMP "probe"
+          New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+          $probeScript = Join-Path $probeDir "probe.ps1"
+          $logFile     = Join-Path $probeDir "hook-fired.log"
+
+          $script = @'
+          param([string]$LogPath)
+          $payload = [Console]::In.ReadToEnd()
+          $tool = "unknown"
+          try {
+            $obj = $payload | ConvertFrom-Json -ErrorAction Stop
+            if ($obj.toolName) { $tool = [string]$obj.toolName }
+          } catch {}
+          $ts = Get-Date -Format 'o'
+          Add-Content -LiteralPath $LogPath -Value "$ts post-tool fired tool=$tool"
+          Write-Output '{}'
+          '@
+          $script | Set-Content -LiteralPath $probeScript -Encoding UTF8
+
+          $config = @{
+            version = 1
+            hooks = @{
+              postToolUse = @(
+                @{
+                  type       = 'command'
+                  powershell = "powershell -NoProfile -File `"$probeScript`" `"$logFile`""
+                }
+              )
+            }
+          } | ConvertTo-Json -Depth 5
+
+          $config | Set-Content -LiteralPath "$env:USERPROFILE\.copilot\hooks\probe.json" -Encoding UTF8
+          "" | Set-Content -LiteralPath $logFile
+
+          echo "PROBE_LOG=$logFile" >> $env:GITHUB_ENV
+          Write-Host "=== Probe script ==="
+          Get-Content $probeScript
+          Write-Host ""
+          Write-Host "=== Hook config ==="
+          Get-Content "$env:USERPROFILE\.copilot\hooks\probe.json"
+
+      - name: Run Copilot session
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+        shell: bash
+        run: |
+          set +e
+          echo "=== Platform: ${{ matrix.os }} ==="
+          echo "=== Copilot CLI version ==="
+          copilot --version
+          echo
+          echo "=== Running session ==="
+          copilot -p "${{ github.event.inputs.prompt }}" \
+            --allow-all-tools \
+            --allow-all-paths \
+            --no-color \
+            --log-level "${{ github.event.inputs.log_level }}" 2>&1 | tail -30
+          echo
+          echo "=== Hook fire log ==="
+          if [ -s "$PROBE_LOG" ]; then
+            cat "$PROBE_LOG"
+          else
+            echo "(empty or missing — no dispatches captured)"
+          fi
+          echo
+          echo "=== Count by tool ==="
+          if [ -s "$PROBE_LOG" ]; then
+            awk '{
+              for (i=1; i<=NF; i++) if ($i ~ /^tool=/) { split($i, a, "="); print a[2] }
+            }' "$PROBE_LOG" | sort | uniq -c | sort -rn
+            echo
+            wf_count=$(grep -c "tool=web_fetch" "$PROBE_LOG" || true)
+            echo "web_fetch dispatch count: ${wf_count:-0}"
+            if [ "${wf_count:-0}" = "0" ]; then
+              echo "::warning ::No web_fetch dispatches captured on ${{ matrix.os }} — see hook log artifact."
+            fi
+          else
+            echo "(no log to count)"
+          fi
+
+      - name: Upload hook log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-fire-log-${{ matrix.os }}
+          path: ${{ env.PROBE_LOG }}
+          if-no-files-found: warn
+          retention-days: 14
