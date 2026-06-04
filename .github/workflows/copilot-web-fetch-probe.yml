@@ -25,7 +25,8 @@ on:
     inputs:
       prompt:
         description: 'Prompt for the probe session (must induce web_fetch + a shell call)'
-        default: 'Use the web_fetch tool to fetch https://example.com and tell me what page it returns. Then run "echo probe done" via the bash or powershell tool. Do both.'
+        # No inner double-quotes — they break GitHub Actions string substitution.
+        default: 'Use the web_fetch tool to fetch https://example.com and tell me what page it returns. Then run a date command via the bash or powershell tool. Do both.'
         required: true
       log_level:
         description: 'Copilot CLI log level (debug captures the dispatch lines we want)'
@@ -179,6 +180,10 @@ jobs:
       - name: Run Copilot session
         env:
           GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+          # Pass through env vars rather than ${{ }} templating into bash —
+          # that way any user-supplied quotes in the prompt are safe.
+          COPILOT_PROMPT: ${{ github.event.inputs.prompt }}
+          COPILOT_LOG_LEVEL: ${{ github.event.inputs.log_level }}
         shell: bash
         run: |
           set +e
@@ -186,12 +191,15 @@ jobs:
           echo "=== Copilot CLI version ==="
           copilot --version
           echo
+          echo "=== Prompt ==="
+          echo "$COPILOT_PROMPT"
+          echo
           echo "=== Running session ==="
-          copilot -p "${{ github.event.inputs.prompt }}" \
+          copilot -p "$COPILOT_PROMPT" \
             --allow-all-tools \
             --allow-all-paths \
             --no-color \
-            --log-level "${{ github.event.inputs.log_level }}" 2>&1 | tail -30
+            --log-level "$COPILOT_LOG_LEVEL" 2>&1 | tail -40
           echo
           echo "=== Hook fire log ==="
           if [ -s "$PROBE_LOG" ]; then
