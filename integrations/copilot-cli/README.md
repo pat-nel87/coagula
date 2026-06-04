@@ -46,6 +46,7 @@ Set before running `copilot`. All optional.
 | `COAGULA_THRESHOLD` | `2000` | postToolUse skips outputs under this token count. |
 | `COAGULA_NOISY_PATTERNS` | empty | Extra extended-regex alternation for preToolUse (e.g. `helm\|terraform`). |
 | `COAGULA_SKIP_TOOLS` | empty | Extra comma-separated tool names for postToolUse to bypass. Always-skipped: `report_intent`, `sql`, `todo_*`, `notification`. |
+| `COAGULA_WEB_FETCH_HINT` | `on` | Default-on hint nudging the model away from `web_fetch` (which bypasses `postToolUse` per [#3665](https://github.com/github/copilot-cli/issues/3665)). Set to `off` / `0` to silence. |
 | `COAGULA_DISABLE` | `0` | Set to `1` to bypass both hooks. |
 
 ## How the hooks interact
@@ -100,9 +101,25 @@ model to fetch via `Invoke-RestMethod` / `Invoke-WebRequest` / `curl`
 through the `powershell` tool instead, since those commands match the
 default noisy pattern (v0.3.3+) and pre-bash rewrites them in-pipeline.
 
-Tracking: the architectural fix lives upstream in `github/copilot-cli`
-— a hook-dispatch issue, not a coagula bug. We'll link the upstream
-issue here when it's filed.
+**Mitigation since v0.3.10:** the pre-bash hook now emits a short
+`additionalContext` hint when the model invokes `web_fetch`, suggesting
+the funnelable route:
+
+```
+[coagula] web_fetch bypasses postToolUse; consider Invoke-RestMethod
+via powershell for funneling
+```
+
+This is best-effort — Copilot's model may or may not heed the hint —
+and adds a small per-call overhead. Disable with
+`COAGULA_WEB_FETCH_HINT=off` if you find it noisy or it doesn't help
+your workflow.
+
+Tracking: the architectural fix lives upstream at
+[github/copilot-cli#3665](https://github.com/github/copilot-cli/issues/3665).
+When that lands, the hint will become obsolete and can be turned off
+(or it'll silently become a no-op if `web_fetch` results start
+dispatching through `postToolUse` like every other tool).
 
 ## Idempotency
 

@@ -56,6 +56,24 @@ try {
     Out-Passthrough
 }
 
+$toolName = [string]$payload.toolName
+
+# web_fetch nudge: Copilot CLI does NOT dispatch postToolUse for the
+# web_fetch tool (tracked upstream at github/copilot-cli#3665), so its
+# HTTP responses bypass the funnel entirely. We can't compress them
+# from here — preToolUse can only modify input — but we can emit a
+# short hint suggesting the model route HTTP through `powershell` +
+# Invoke-RestMethod, which DOES get funneled in-pipeline by the rest
+# of this hook. Default on; opt out with COAGULA_WEB_FETCH_HINT=off.
+$webFetchHintDisabled = @('off','OFF','disabled','DISABLED','0') -contains $env:COAGULA_WEB_FETCH_HINT
+if ($toolName -eq 'web_fetch' -and -not $webFetchHintDisabled) {
+    @{
+        permissionDecision = 'allow'
+        additionalContext  = '[coagula] web_fetch bypasses postToolUse; consider Invoke-RestMethod via powershell for funneling'
+    } | ConvertTo-Json -Depth 5 -Compress | Write-Output
+    exit 0
+}
+
 # Accept shell-family toolNames across platforms and wrappers:
 #   - bare:     'bash' / 'shell' / 'powershell' (native Copilot CLI tools)
 #   - prefixed: 'write_powershell', 'mcp__server__shell', 'mcp.acme.bash',
@@ -63,7 +81,6 @@ try {
 # The toolArgs `command` check below acts as a second filter: if the
 # toolName looks shell-like but the args don't carry a `command` field
 # (e.g. read_powershell), the hook falls through to passthrough safely.
-$toolName = [string]$payload.toolName
 $shellNamePattern = '(?i)(^|[_.-])(bash|shell|powershell|sh|zsh|fish)$'
 if (-not ($toolName -match $shellNamePattern)) { Out-Passthrough }
 

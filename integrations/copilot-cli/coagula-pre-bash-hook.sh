@@ -40,6 +40,25 @@ command -v coagula >/dev/null 2>&1 || { echo "$allow_passthrough"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "$allow_passthrough"; exit 0; }
 
 tool_name=$(printf '%s' "$input" | jq -r '.toolName // empty')
+
+# web_fetch nudge: Copilot CLI does NOT dispatch postToolUse for the
+# web_fetch tool (tracked upstream at github/copilot-cli#3665), so its
+# HTTP responses bypass the funnel entirely. preToolUse can only modify
+# input, but we can emit a short hint nudging the model toward
+# Invoke-RestMethod via the `powershell` tool, which DOES get funneled.
+# Default on; opt out with COAGULA_WEB_FETCH_HINT=off.
+case "${COAGULA_WEB_FETCH_HINT:-on}" in
+  off|OFF|disabled|DISABLED|0) web_fetch_hint_disabled=1 ;;
+  *) web_fetch_hint_disabled=0 ;;
+esac
+if [[ "$tool_name" == "web_fetch" && "$web_fetch_hint_disabled" -eq 0 ]]; then
+  jq -nc '{
+    permissionDecision: "allow",
+    additionalContext: "[coagula] web_fetch bypasses postToolUse; consider Invoke-RestMethod via powershell for funneling"
+  }'
+  exit 0
+fi
+
 # Accept shell-family toolNames across platforms and wrappers:
 #   - bare:     bash / shell / powershell (native Copilot CLI tools)
 #   - prefixed: write_powershell, mcp__server__shell, mcp.acme.bash —

@@ -339,6 +339,58 @@ jobs:
           } finally {
             Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
           }
+      - name: preToolUse — web_fetch gets hint by default (Idea A)
+        shell: pwsh
+        run: |
+          # v0.3.10 Idea A: nudge the model toward funnelable HTTP routes
+          # for web_fetch (Copilot CLI doesn't dispatch postToolUse for it
+          # — github/copilot-cli#3665). Default on; disable with
+          # COAGULA_WEB_FETCH_HINT=off.
+          $payload = '{"toolName":"web_fetch","toolArgs":"{\"url\":\"https://example.com\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            Remove-Item Env:COAGULA_WEB_FETCH_HINT -ErrorAction SilentlyContinue
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+          }
+          $obj = $out | ConvertFrom-Json
+          if (-not $obj.additionalContext) {
+            Write-Host "FAIL: default-on hint did not fire on web_fetch"
+            Write-Host "Got: $($obj | ConvertTo-Json -Compress)"
+            exit 1
+          }
+          if ($obj.additionalContext -notmatch 'Invoke-RestMethod') {
+            Write-Host "FAIL: hint missing Invoke-RestMethod nudge: $($obj.additionalContext)"
+            exit 1
+          }
+          if ($obj.modifiedArgs) {
+            Write-Host "FAIL: hint should not modify args (just append context)"
+            exit 1
+          }
+          Write-Host "PASS: web_fetch gets default-on hint with Invoke-RestMethod nudge"
+      - name: preToolUse — COAGULA_WEB_FETCH_HINT=off disables the hint
+        shell: pwsh
+        run: |
+          $payload = '{"toolName":"web_fetch","toolArgs":"{\"url\":\"https://example.com\"}"}'
+          Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh integrations/copilot-cli/coagula-pre-bash-hook.sh.bak
+          try {
+            $env:COAGULA_WEB_FETCH_HINT = 'off'
+            $out = $payload | pwsh -NoProfile -File integrations/copilot-cli/coagula-pre-bash-hook.ps1
+          } finally {
+            Move-Item integrations/copilot-cli/coagula-pre-bash-hook.sh.bak integrations/copilot-cli/coagula-pre-bash-hook.sh
+            Remove-Item Env:COAGULA_WEB_FETCH_HINT -ErrorAction SilentlyContinue
+          }
+          $obj = $out | ConvertFrom-Json
+          if ($obj.additionalContext) {
+            Write-Host "FAIL: =off didn't suppress hint: $($obj | ConvertTo-Json -Compress)"
+            exit 1
+          }
+          if ($obj.permissionDecision -ne 'allow') {
+            Write-Host "FAIL: expected plain allow with =off"
+            exit 1
+          }
+          Write-Host "PASS: COAGULA_WEB_FETCH_HINT=off suppresses hint"
       - name: preToolUse — spill-file reads pass through unchanged
         shell: pwsh
         run: |
