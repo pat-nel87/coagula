@@ -9,8 +9,11 @@ payloads. They validate the v0.6.0 additions:
 - Decision logging (every hook exit emits a debug-log line categorizing
   the verdict)
 
-The hook depends on the ``coagula`` console script being on PATH, which is
-true in the dev venv. Tests skip if it isn't.
+Skipped on Windows: the bash hook on Windows is only invoked via the
+PowerShell auto-defer path (Git Bash), and Windows-style HOME paths
+mixed into bash variables produce path-handling failures in the new
+session-state code. The canonical Windows hook is the .ps1 sibling,
+which has its own integration tests (ps-hook-stdin-windows job in CI).
 """
 
 from __future__ import annotations
@@ -19,9 +22,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="bash hook tests skipped on Windows — PS hook is the canonical path "
+           "(see .ps1 + ps-hook-stdin-windows CI job)",
+)
 
 HOOK = Path(__file__).parent.parent / "integrations" / "copilot-cli" / "coagula-post-tool-hook.sh"
 
