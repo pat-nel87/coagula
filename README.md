@@ -23,14 +23,14 @@ funneled through `coagula` before Copilot CLI's model sees (and bills) it.
 **macOS / Linux:**
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.7.0/coagula-0.7.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.7.3/coagula-0.7.3-py3-none-any.whl
 curl -fsSL https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.7.0/coagula-0.7.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.7.3/coagula-0.7.3-py3-none-any.whl
 iwr -useb https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.ps1 | iex
 ```
 
@@ -79,29 +79,54 @@ For flat-fee plans (Claude Pro, Cursor, Windsurf) the dollar impact is
 zero. You still get faster responses, less context-window pressure, and
 cleaner inputs to the model.
 
-### When coagula actually helps — and when it doesn't
+### When coagula actually helps — measured against real Copilot CLI sessions
 
-The compression engine works; the question is whether the hook **fires**
-on your workload. The hook intercepts tool outputs from Copilot CLI's
-postToolUse event, so the firing rate depends on which tools your session
-uses and what their output sizes are.
+The compression engine works; the question is whether the **firing rate**
+× **savings per firing** product is positive on your workload. Below are
+results from counterbalanced 4-trial experiments (baseline-funneled-
+baseline-funneled, cache held constant at ~26-87k cached tokens across
+all trials so any delta is attributable to coagula, not prompt-cache
+priming).
 
-| Workload pattern | Firing rate | Real savings | Why |
-|---|---|---|---|
-| `bash` commands dumping large output (`cat`, `kubectl -o yaml`, `journalctl`, `psql ... select *`) | ~100% on >2 KB outputs | **High** (70-99% reduction, demonstrated) | Bash output goes through the hook; coagula's lossless stages dominate |
-| MCP tool blobs (github, filesystem, postgres MCP servers) returning >1 KB | ~100% | **High** | Model can't shell-compress these — they come back in full |
-| Paginated `view_range` / `read_file` (modern coding-agent default) | Fires per-call but mostly funnel-noops | **Low** by default | Each call returns ~1 line; nothing to dedup against one line. v0.7.0 adds nudges + cached file summaries to mitigate (below). |
-| User pastes raw content into chat | 0% | **Zero** | Prompts don't go through postToolUse — only tool calls do |
-| `web_fetch` tool results | 0% (known gap) | **Zero** | `web_fetch` doesn't dispatch postToolUse — [upstream issue](https://github.com/github/copilot-cli/issues/3665) |
-| Smart model + small targeted queries (model uses `grep | uniq` first) | Hook fires but on already-summarized output | **Low** | Model did the compression work itself; coagula nibbles at the margins |
+| Workload | Model | Baseline | Funneled | Δ |
+|---|---|---|---|---|
+| **bash dump** (force `cat large_file`, no pipes) | GPT-5 | 9.29 cr | **7.93 cr** | **−14.6%** |
+| Paginated single-line views (20× `view file:N-N`) | GPT-5 | 8.11 cr | 8.20 cr | +1.0% (noise) |
+| Paginated single-line views (20× `view file:N-N`) | Sonnet 4.6 | 8.14 cr | 8.18 cr | +0.5% (noise) |
 
-**The honest summary:** coagula delivers measurable savings in the
-bash-heavy diagnostic workflow it was designed for. In modern agent UX
-where the model dispatches surgical reads, savings are smaller and
-require the v0.7+ mitigations (multi-view nudge + cached file summaries)
-to materialize. If your sessions are 100% surgical reads with no bash
-dumps, this tool will not help you — that's not a bug, it's a structural
-property of the hook interface.
+**Two real-world conclusions from those numbers:**
+
+1. **coagula provides ~15% credit savings on bash-dump diagnostic
+   workflows.** This is the original design target — `kubectl get pods -o
+   yaml`, `journalctl -u svc`, `psql ... select * from big_table`, etc.
+   The model dispatches one big command, the postToolUse hook intercepts
+   the multi-KB output, the funnel's lossless stages (Dedup + Prune)
+   compress it 70-99%. Even when Copilot CLI spills the output to a
+   temp file and the model views the spill, coagula's view-summary path
+   catches it.
+
+2. **coagula is essentially breakeven on paginated single-line view
+   workloads regardless of model.** Both GPT-5 and Claude Sonnet 4.6
+   ignored coagula's nudge + file-summary injection text and made all 20
+   view calls anyway. v0.7.3 made the summary one-shot per file so the
+   overhead is ~zero, but the model behavior doesn't change — there's no
+   compression opportunity in a 1-line view output. **If your sessions
+   are 100% surgical line-range reads with no bash dumps, this tool will
+   neither help nor hurt; that's a structural limit of the postToolUse
+   hook interface, not a bug.**
+
+Workloads coagula provably **cannot** help:
+
+| Workload | Why |
+|---|---|
+| `web_fetch` tool results | Doesn't dispatch postToolUse — [upstream issue](https://github.com/github/copilot-cli/issues/3665) |
+| User pastes raw content into chat | Prompts don't go through postToolUse — only tool calls do |
+| Sessions where the model `grep`/`uniq`-pre-filters everything | Hook fires but on already-summarized output (model did the work) |
+
+The compression-percentages-on-fixtures table above is real, but it
+measures only the second multiplier (savings per firing). Real session
+deltas depend on what fraction of your tool calls are bash dumps vs
+surgical reads.
 
 References:
 - [GitHub Copilot is moving to usage-based billing — GitHub Blog](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
@@ -174,7 +199,7 @@ to `PATH`. If you're inside an org that disabled hooks, see Troubleshooting.
 ### 2. Install `coagula` (plus `jq` if you'll use the bash hook)
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.7.0/coagula-0.7.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.7.3/coagula-0.7.3-py3-none-any.whl
 coagula --help                  # verify on PATH
 ```
 
@@ -351,7 +376,11 @@ Common specifics:
 ### What's verified end-to-end (honest status)
 
 - **macOS:** Library, CLI, Ollama, bash hooks in live Copilot CLI session
-  — all verified locally.
+  — all verified locally. Counterbalanced n=4 bash-dump test shows
+  −14.6% credits (see "When coagula actually helps"). Counterbalanced
+  paginated-view tests on both GPT-5 and Sonnet 4.6 show ~0% delta
+  (within noise) — the nudge + summary features fire correctly but
+  current models ignore the injected hint text.
 - **Windows + GitHub Copilot CLI:** Verified end-to-end on Windows 11
   Enterprise + Copilot CLI 1.0.59 + Python 3.13. Hooks fire in live
   sessions; Azure OpenAI route succeeds when env vars are set; PowerShell
@@ -376,8 +405,8 @@ Common specifics:
 | `COAGULA_KEEP` | Top-K chunks kept by Relevance | 5 |
 | `COAGULA_THRESHOLD` | Override per-tool default thresholds with one global number. Unset: per-tool defaults (bash 2000, view 500, MCP 1000, other 1500). | (per-tool table) |
 | `COAGULA_CUMULATIVE_THRESHOLD` | Session-level token total above which sub-threshold calls also get funneled. Catches paginated `view_range`/`grep` patterns. 0 disables. | 8000 |
-| `COAGULA_VIEW_NUDGE_AFTER` | After N view-tool calls per session, inject a one-time hint encouraging bash alternatives that compress (v0.7.0+). 0 disables. | 4 |
-| `COAGULA_SUMMARY_INJECT` | On first view of a file, if file content compresses well, prepend a coagula summary to that and subsequent view responses (v0.7.0+). Set to `off` to disable. | on |
+| `COAGULA_VIEW_NUDGE_AFTER` | After N view-tool calls per session, inject a one-time hint encouraging bash alternatives that compress (v0.7.0+). 0 disables. **Currently dormant**: tested models (GPT-5, Sonnet 4.6) ignore the hint. Costs nothing — kept for future model compatibility. | 4 |
+| `COAGULA_SUMMARY_INJECT` | On first view of a file, if file content compresses well, prepend a coagula summary to that one response (v0.7.3+: one-shot, not every call). Set to `off` to disable. **Currently dormant** for the same reason as the nudge. | on |
 | `COAGULA_NOISY_PATTERNS` | Extra `preToolUse` Bash commands to intercept (regex) | (built-in list) |
 | `COAGULA_SKIP_TOOLS` | Extra `postToolUse` tools to bypass | (built-in skiplist) |
 | `COAGULA_DISABLE` | Kill switch — hooks no-op | (off) |
@@ -503,28 +532,41 @@ See `SPEC.md` for the full contract.
 
 ## Status
 
-**v0.7.0** — Adds two mitigations for the paginated-`view_range` workload
-shape where v0.6.0's per-call thresholds couldn't help (single-line
-outputs are individually uncompressible). Together they aim to **change
-model behavior** rather than just compress single calls:
+**v0.7.3** (current) — Hardens the v0.7 view-mitigation features:
 
-- **Multi-view nudge**: after `COAGULA_VIEW_NUDGE_AFTER` view-tool calls
-  per session (default 4), the next response gets a one-time text hint
-  prepended suggesting bash alternatives (`grep -A 5 PATTERN file`,
-  `cat file | head -N`) that auto-funnel and save more.
-- **Cached file summaries**: on the first view of a file, coagula tries
-  to compute a tiny summary of the whole file. If the file is genuinely
-  dedup-friendly (< 500-char summary that's < 10% of file size — both
-  conditions needed to rule out budget-stage truncation), the summary
-  is cached per-session and prepended to view responses for that file.
-  Goal: model sees the file pattern early, may stop paginating.
+- **One-shot summary injection.** v0.7.0/v0.7.2 injected the cached
+  file summary on *every* view response of the same file, adding ~180
+  tokens × N calls. n=4 counterbalanced testing showed this *cost* +15%
+  credits without changing model behavior. v0.7.3 injects the summary
+  only on the first view of each file. Re-tested counterbalanced: now
+  ~0% delta (within noise).
+- **Defensive hook robustness.** Dropped `set -e` in favor of an EXIT
+  trap that converts any unexpected exit to a clean `{}` passthrough +
+  decision-log entry. Fixed an empirically-discovered jq-on-real-payload
+  bug that caused 19/20 hook invocations to silently fail in real
+  Copilot CLI sessions on v0.7.0/v0.7.1.
+- **Schema-correct file-path extraction.** Copilot CLI passes the view
+  tool's `toolArgs` as a JSON string (not an object); v0.7.2 fixed the
+  extractor to handle both shapes so the summary path actually fires
+  in production sessions.
 
-Both features add bounded overhead (the nudge fires once; the summary
-is small) and the funnel-noop guard still prevents accidental size
-growth. Native PowerShell users get v0.6.0 features; v0.7.0 injection
-features require Git Bash (auto-detected by the PS hook when present).
+**Honest read on the v0.7 mitigation story:** the nudge + summary
+features ship and fire correctly, but **neither GPT-5 nor Claude
+Sonnet 4.6 changes behavior in response to the injected hint text.**
+They're dormant — costless after v0.7.3, but also savingless. They
+remain in the codebase as kindling for when a model that heeds
+`additionalContext`-style hints comes along, but provide no real value
+today. **The actual measured value lives entirely in the v0.3-era
+bash-dump compression path** (~15% credit savings on counterbalanced
+real-session tests; see "When coagula actually helps" above).
 
-8 new integration tests validate the nudge + summary code paths.
+Native PowerShell users get v0.6.0 features (per-tool thresholds +
+cumulative tracking + decision logging); v0.7 injection features
+require Git Bash (auto-detected by the PS hook when present).
+
+21 hook integration tests validate the bash hook end-to-end with
+synthetic Copilot CLI payloads, including the v0.7.2 string-shaped
+toolArgs regression check and the v0.7.3 one-shot summary injection.
 
 **v0.6.0** — Per-tool thresholds (bash 2000, view 500, MCP 1000) replace
 the single global default — increases firing rate on paginated `view_range`
