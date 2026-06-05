@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import time
 
-from coagula import Chunk
-from coagula.mcp import DeferredStore
+from coagula import Chunk, DeferredStore
 from coagula.stages import chunk_id
 
 

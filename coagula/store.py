@@ -1,17 +1,19 @@
 """DeferredStore — per-request store of demoted chunks. See SPEC §8.
 
-The funnel's correctness guarantee is "demote, never delete": any chunk that
-falls out of the assembled prompt is retrievable later via this store. The
-default backend is an in-memory dict with lazy TTL eviction. The interface
-deliberately matches what a Redis-backed swap-in would expose so the sidecar
-deployment (M6) can share storage without changing callers.
+The funnel's correctness guarantee is "demote, never delete": any chunk
+that falls out of the assembled prompt is retrievable later via this
+store. The default backend is an in-memory dict with lazy TTL eviction.
+The interface deliberately matches what a Redis-backed swap-in would
+expose so a shared-storage deployment can swap implementations without
+changing callers.
 
-Workspace scoping (v0.3.11): every put/retrieve/manifest call accepts an
-optional ``workspace_key`` to scope storage by project / session identity.
-Defaults to ``""`` for backward compat with callers that don't supply one.
-The MCP server resolves the workspace from ``COAGULA_WORKSPACE_KEY`` env
-or the process CWD at startup, so any long-lived server process serving
-multiple workspaces won't cross-leak chunks via colliding request_ids.
+Workspace scoping (v0.3.11): every put/retrieve/manifest call accepts
+an optional ``workspace_key`` to scope storage by project / session
+identity. Defaults to ``""`` for backward compat with callers that
+don't supply one. Long-lived embedding processes that serve multiple
+project dirs should set ``workspace_key`` per call (or resolve it once
+from ``COAGULA_WORKSPACE_KEY`` env / CWD) to avoid cross-workspace
+chunk leaks via colliding ``request_id``s.
 """
 
 from __future__ import annotations
@@ -19,8 +21,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from ..stage import Chunk
-from ..stages import chunk_id
+from .stage import Chunk
+from .stages import chunk_id
 
 
 @dataclass

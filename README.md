@@ -258,8 +258,10 @@ Common specifics:
   `COAGULA_KEEP`, or set `COAGULA_THRESHOLD=10000` so only enormous outputs
   get intercepted.
 - **Org disabled hooks.** Some GitHub orgs disable Copilot CLI hooks via
-  policy. Workaround: use the MCP server path below — it's LLM-invoked, not
-  policy-restricted.
+  policy. There's no workaround inside Copilot CLI itself; either pre-funnel
+  payloads manually with the `coagula` CLI before feeding them in
+  (`kubectl … | coagula --query "…" | pbcopy`), or `git checkout v0.4.0`
+  for the LLM-invoked `coagula-mcp` server, which isn't hook-policy gated.
 - **Tool repeatedly re-reads the spill file.** Copilot CLI persists original
   output at `/tmp/copilot-tool-output-*.txt` (Windows: `%TEMP%\copilot-tool-output-*.txt`);
   the model may go fetch the raw blob if it doesn't trust the funneled
@@ -268,8 +270,8 @@ Common specifics:
 
 ### What's verified end-to-end (honest status)
 
-- **macOS:** Library, CLI, MCP server, Ollama, bash hooks in live Copilot
-  CLI session — all verified locally.
+- **macOS:** Library, CLI, Ollama, bash hooks in live Copilot CLI session
+  — all verified locally.
 - **Windows + GitHub Copilot CLI:** Verified end-to-end on Windows 11
   Enterprise + Copilot CLI 1.0.59 + Python 3.13. Hooks fire in live
   sessions; Azure OpenAI route succeeds when env vars are set; PowerShell
@@ -351,7 +353,7 @@ kubectl get pod <name> -o json | coagula --query "why is this pod failing" --rep
 ## Use as a library
 
 ```python
-from coagula.mcp import coagula_payload, ChunkSpec
+from coagula import coagula_payload, ChunkSpec
 
 result = coagula_payload(
     [

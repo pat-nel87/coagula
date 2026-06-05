@@ -1,11 +1,11 @@
-"""coagula_payload adapter tests per SPEC §9, §11 (MCP block)."""
+"""coagula_payload library API tests per SPEC §9, §11."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from coagula.mcp import ChunkSpec, DeferredStore, coagula_payload
+from coagula import ChunkSpec, DeferredStore, coagula_payload
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

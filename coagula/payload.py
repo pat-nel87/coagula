@@ -1,10 +1,10 @@
-"""MCP adapter — `coagula_payload`. See SPEC §9.
+"""Public library API — ``coagula_payload``. See SPEC §9.
 
-Diagnostic MCP tools (kube-doctor, pg-doctor, Azure MCP) call this from
-their own tool implementations before returning context to the model. The
-adapter pins severity → tier at ingestion (more reliable than any ranker),
-selects the right denylist profile, runs the seven-stage funnel, and stores
-the deferred chunks for later `retrieve` calls.
+Embedding code (your own diagnostic tools, custom scripts, etc.) calls
+this from its own implementations before returning context to a model.
+It pins severity → tier at ingestion (more reliable than any ranker),
+selects the right denylist profile, runs the seven-stage funnel, and
+stores the deferred chunks for later retrieval via ``DeferredStore``.
 """
 
 from __future__ import annotations
@@ -14,10 +14,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from .. import default_funnel
-from ..config import get_profile
-from ..stage import Chunk, Tier
-from ..stages import chunk_id
+from . import default_funnel
+from .config import get_profile
+from .stage import Chunk, Tier
+from .stages import chunk_id
 from .store import DeferredStore
 
 # Severity strings that mark a chunk as CRITICAL per SPEC §9.

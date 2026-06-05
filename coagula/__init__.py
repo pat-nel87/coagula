@@ -24,6 +24,9 @@ __all__ = [
     "Assemble",
     "Budget",
     "Chunk",
+    "ChunkSpec",
+    "CoagulaResult",
+    "DeferredStore",
     "Dedup",
     "Funnel",
     "Normalize",
@@ -31,9 +34,11 @@ __all__ = [
     "Relevance",
     "Stage",
     "StageResult",
+    "StoredChunk",
     "Summarize",
     "Tier",
     "chunk_id",
+    "coagula_payload",
     "count_tokens",
     "default_funnel",
 ]
@@ -67,3 +72,9 @@ def default_funnel(
             Assemble(),
         ]
     )
+
+
+# Library API re-exports. Defined after ``default_funnel`` because
+# ``payload`` imports it at module-load time — keeps the import graph acyclic.
+from .payload import ChunkSpec, CoagulaResult, coagula_payload  # noqa: E402
+from .store import DeferredStore, StoredChunk  # noqa: E402

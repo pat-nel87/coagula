@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coagula"
-version = "0.5.0"
+version = "0.5.1"
 description = "Local context-funnel for GitHub Copilot CLI: trim, dedup, prune, rank, and compress noisy tool output before it reaches the model."
 requires-python = ">=3.10"
 readme = "README.md"
