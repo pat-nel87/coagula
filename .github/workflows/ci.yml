@@ -616,8 +616,14 @@ jobs:
             exit 1
           }
           $content = Get-Content -Raw -LiteralPath $logFile
-          if ($content -notmatch '\[post-tool\] funneled') {
-            Write-Host "FAIL: log file missing [post-tool] entry. Content: $content"
+          # v0.6.0 renamed the log verb to "fired" and added structured fields
+          # (in=, out=, reason=, cumulative=) so firing rate is observable.
+          if ($content -notmatch '\[post-tool\] fired') {
+            Write-Host "FAIL: log file missing [post-tool] fired entry. Content: $content"
+            exit 1
+          }
+          if ($content -notmatch 'in=\d+' -or $content -notmatch 'out=\d+') {
+            Write-Host "FAIL: log line missing in=/out= structured fields. Content: $content"
             exit 1
           }
           Write-Host "PASS: debug log entry written: $($content.Trim())"
