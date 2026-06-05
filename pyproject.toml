@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coagula"
-version = "0.4.0"
-description = "Local context manicuring funnel: trim, dedup, prune, rank, and compress LLM context before it reaches a frontier model."
+version = "0.5.0"
+description = "Local context-funnel for GitHub Copilot CLI: trim, dedup, prune, rank, and compress noisy tool output before it reaches the model."
 requires-python = ">=3.10"
 readme = "README.md"
 license = "Apache-2.0"
@@ -16,13 +16,10 @@ dependencies = []
 [project.optional-dependencies]
 tiktoken = ["tiktoken>=0.7"]
 ollama = []   # documentation only — coagula.models.ollama uses stdlib urllib
-mcp = ["mcp>=1.0,<2.0"]
-all = ["mcp>=1.0,<2.0", "tiktoken>=0.7"]
-dev = ["pytest>=8", "mcp>=1.0,<2.0"]
+dev = ["pytest>=8"]
 
 [project.scripts]
 coagula = "coagula.cli:main"
-coagula-mcp = "coagula.mcp.server:main"
 
 [tool.setuptools.packages.find]
 include = ["coagula*"]

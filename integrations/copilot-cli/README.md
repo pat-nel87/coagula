@@ -1,9 +1,8 @@
 # GitHub Copilot CLI hook bridge
 
 Two hooks that, together, give you **true universal interception** in
-GitHub Copilot CLI — strictly more capable than the Claude Code integration
-because Copilot CLI's `postToolUse` event can return `modifiedResult` to
-replace any tool's output.
+GitHub Copilot CLI: the `postToolUse` event can return `modifiedResult`
+to replace any tool's output before the model sees it.
 
 | Hook | Event | What it does | Why |
 |---|---|---|---|
@@ -65,7 +64,8 @@ If you have only the post hook:
 3. **postToolUse** matches → token count over threshold → funnels via
    `modifiedResult`. Model sees the cleaned version, not the original.
 
-If you have only the pre hook: same as the Claude Code bridge — Bash-only.
+If you have only the pre hook: Bash-only interception. The post hook is
+where the universal-interception value lives — install both.
 
 ## What gets the universal treatment (post hook)
 
@@ -145,8 +145,7 @@ rm -rf ~/.copilot/hooks-bin
   signal travels in `modifiedResult.textResultForLlm`.
 - **Spill files:** Copilot CLI persists the original (pre-modified) tool
   output to a temp file (`copilot-tool-output-*.txt`). The model can still
-  read those if it wants the full original. That's a feature — it's the
-  same "deferred chunks are retrievable" property coagula's own MCP server
-  exposes, just at the CLI layer.
+  read those if it wants the full original — a "demote, never delete"
+  property at the CLI layer.
 - **Hooks are Preview-grade in Copilot CLI** — config format may change.
   Pin to a specific Copilot CLI version in CI/prod scripts.

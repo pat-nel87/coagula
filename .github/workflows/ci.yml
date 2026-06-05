@@ -100,21 +100,6 @@ jobs:
           if (-not $parsed.hooks.postToolUse[0].bash)       { Write-Host "FAIL: postToolUse.bash missing"; exit 1 }
           if (-not $parsed.hooks.postToolUse[0].powershell) { Write-Host "FAIL: postToolUse.powershell missing"; exit 1 }
           Write-Host "PASS: dual-field config created at $cfg"
-      - name: Sandbox USERPROFILE and run Claude Code installer
-        shell: pwsh
-        run: |
-          $sandbox = Join-Path $env:RUNNER_TEMP "coagula-cc-sandbox"
-          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
-          $env:USERPROFILE = $sandbox
-          .\integrations\claude-code\install.ps1 -AutoUpdateSettings
-          $settings = Join-Path $sandbox '.claude\settings.json'
-          if (-not (Test-Path $settings)) { Write-Host "FAIL: $settings not created"; exit 1 }
-          $parsed = Get-Content -Raw -LiteralPath $settings | ConvertFrom-Json
-          $bashEntry = $parsed.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Bash' }
-          if (-not $bashEntry) { Write-Host "FAIL: no Bash matcher in settings.json"; exit 1 }
-          if (-not $bashEntry.hooks[0].command) { Write-Host "FAIL: hook command missing"; exit 1 }
-          Write-Host "PASS: settings.json patched at $settings"
-
   # Feed synthetic Copilot CLI payloads to each PowerShell hook on a
   # Windows runner. Catches PS-specific bugs (string-quoting, encoding,
   # JSON serialization) that the parse check misses.

@@ -49,7 +49,6 @@ function Section { param($N, $Title) Write-Host ""; Write-Host "$N. $Title" -For
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Fixture  = Join-Path $RepoRoot 'tests\fixtures\crashloop.log'
 $HookCli  = Join-Path $RepoRoot 'integrations\copilot-cli'
-$HookCC   = Join-Path $RepoRoot 'integrations\claude-code'
 
 Write-Host "coagula Windows smoke-test" -ForegroundColor White
 Write-Host "Repo root: $RepoRoot"
@@ -130,7 +129,6 @@ Section 5 "PowerShell hook scripts parse cleanly"
 $psHooks = @(
     Join-Path $HookCli 'coagula-pre-bash-hook.ps1'
     Join-Path $HookCli 'coagula-post-tool-hook.ps1'
-    Join-Path $HookCC  'coagula-bash-hook.ps1'
 )
 foreach ($h in $psHooks) {
     if (-not (Test-Path $h)) { Fail "Missing: $h"; continue }

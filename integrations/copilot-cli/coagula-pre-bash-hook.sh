@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # GitHub Copilot CLI preToolUse hook (Bash-only).
 #
-# Mirror of the Claude Code preToolUse hook, adapted to Copilot CLI's payload
-# shape (camelCase fields, `toolArgs` is a JSON string in preToolUse, output
-# uses `modifiedArgs`).
+# Rewrites noisy bash commands to pipe through coagula in-line, using
+# Copilot CLI's payload shape (camelCase fields, `toolArgs` is a JSON
+# string in preToolUse, output uses `modifiedArgs`).
 #
 # Use this as a belt-and-suspenders companion to coagula-post-tool-hook.sh:
 # - preToolUse rewrites noisy commands so they pipe through coagula *before*
@@ -91,7 +91,7 @@ if printf '%s' "$command" | grep -qE 'copilot-tool-output-[A-Za-z0-9_-]+\.txt'; 
   echo "$allow_passthrough"; exit 0
 fi
 
-# Built-in noisy-command pattern (matches the Claude Code hook).
+# Built-in noisy-command pattern.
 default_pattern='^(kubectl|oc|helm|psql|mysql|sqlite3|az|gcloud|aws|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|gh api|journalctl|dmesg|ps |netstat|lsof|iptables|systemctl|docker (ps|inspect|logs)|terraform (show|plan)) '
 extra_pattern="${COAGULA_NOISY_PATTERNS:-}"
 

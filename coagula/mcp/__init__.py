@@ -1,8 +1,9 @@
-"""MCP integration: adapter library + deferred store + standalone server.
+"""Library API for embedding coagula in your own tools.
 
-See SPEC §8 (deferred tier / retrieval contract) and §9 (MCP integration).
-The standalone server lives in `coagula.mcp.server` and is gated behind the
-`mcp` optional extra (`pip install coagula[mcp]`).
+Provides ``coagula_payload(ChunkSpec, query, ...)`` plus the deferred-chunk
+store. Named ``mcp`` for historical reasons — the standalone MCP server
+that previously lived here was removed in v0.5.0. See SPEC §8 (deferred
+tier / retrieval contract) and §9 (adapter contract).
 """
 
 from __future__ import annotations

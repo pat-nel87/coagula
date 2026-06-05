@@ -6,9 +6,9 @@
 # and returns the cleaned version via `modifiedResult` — so the model never
 # sees the noisy original.
 #
-# This is *strictly more powerful* than the equivalent in Claude Code, whose
-# PostToolUse is read-only. Only Copilot CLI's postToolUse supports
-# `modifiedResult`, which makes true universal interception possible.
+# Copilot CLI is currently the only major host whose postToolUse supports
+# `modifiedResult`, which makes true universal interception possible — the
+# reason coagula's v0.5.0 line is Copilot-CLI-specific.
 #
 # Wire it up with ~/.copilot/hooks/coagula.json:
 #

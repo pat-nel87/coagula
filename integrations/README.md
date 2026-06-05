@@ -1,87 +1,54 @@
 # Integrations
 
-Host-specific glue that makes `coagula` automatic, beyond the cross-host
-`coagula-mcp` MCP server.
+Host hook glue that makes `coagula` automatic inside GitHub Copilot CLI.
 
-## Capability matrix (June 2026)
+## Why only GitHub Copilot CLI?
 
-| Host | PreToolUse modify input | PostToolUse modify output | Status | Coverage |
-|---|:-:|:-:|:-:|---|
-| **GitHub Copilot CLI** ≥ 1.0 | ✅ `modifiedArgs` | ✅ **`modifiedResult`** | Preview | **Universal interception** — any tool |
-| **Claude Code** | ✅ `updatedInput` | ❌ read-only | Stable | Bash only |
-| **VSCode + Copilot Chat** (agent mode) | ✅ `updatedInput` | ❌ read-only | Preview | Bash only |
-| Claude Desktop / VSCode (non-Copilot) | ➖ no host hooks | ➖ | — | MCP server only (LLM-invoked) |
-| GitHub Copilot CLI (legacy `gh copilot`) | ➖ no hooks/MCP | ➖ | — | Shell composition only |
+As of June 2026, Copilot CLI is the only major coding-agent host with a
+`postToolUse.modifiedResult` hook that can replace the *output* of any
+tool call (Bash, file read, MCP tool blob) before it reaches the model.
+That's the integration coagula was designed for: universal, automatic,
+zero model effort.
 
-**GitHub Copilot CLI is the most powerful host today** — its `postToolUse`
-hook can replace the result of *any* tool call (Bash, view, MCP tools)
-via `modifiedResult`. That's true universal interception. Neither Claude
-Code nor VSCode Copilot allows this — they only let you rewrite the input.
+Other hosts (Claude Code, VSCode Copilot Chat) only support rewriting
+Bash *input* (`updatedInput`). Earlier versions of coagula shipped hooks
+for those too, plus a standalone `coagula-mcp` MCP server. Both were
+removed in v0.5.0 to focus on the audience that benefits from
+compression — Copilot CLI users billed on usage-based AI Credits.
 
-## Integrations shipped here
+Need a different host? `git checkout v0.4.0` for the Claude Code +
+VSCode + MCP server code.
 
-| Dir | Host | What |
-|---|---|---|
-| [`copilot-cli/`](./copilot-cli/) | GitHub Copilot CLI | `preToolUse` Bash rewriter **+** `postToolUse` universal interceptor (the highest-leverage integration) |
-| [`claude-code/`](./claude-code/) | Claude Code | `PreToolUse` Bash rewriter |
-| [`vscode-copilot/`](./vscode-copilot/) | VSCode + Copilot Chat | Reuses the Claude Code hook (VSCode reads `.claude/settings.json`); project-scoped `.github/hooks/coagula.json` template included |
+## Layout
 
-## What I had wrong in earlier docs
+| Directory | Purpose |
+|---|---|
+| [`copilot-cli/`](./copilot-cli/) | `preToolUse` Bash arg rewriter + `postToolUse` universal output funnel; bash + PowerShell ports |
 
-Earlier versions of this README claimed GitHub Copilot CLI had "no
-tool/MCP/plugin support" and that VSCode Copilot Chat had "no hook
-equivalent." Both were wrong:
+Per-platform install:
 
-- GitHub Copilot CLI 1.0 (GA February 2026) ships built-in MCP server
-  support and an 11-event hook system, including the only `modifiedResult`
-  capability in the market today.
-- VSCode Copilot Chat shipped agent hooks in Preview with the same eight
-  events as Claude Code, and deliberately reads `.claude/settings.json` so
-  Claude Code hooks transfer for free.
+```bash
+./integrations/copilot-cli/install.sh        # macOS / Linux / Git Bash
+.\integrations\copilot-cli\install.ps1       # Windows PowerShell
+```
 
-Both pieces of info post-dated the model's training cutoff; the corrected
-matrix above is now built and tested.
+The installer writes `~/.copilot/hooks/coagula.json` with both `bash` and
+`powershell` command fields — Copilot CLI picks the right one per platform.
+PowerShell hooks auto-defer to Git Bash if it's on PATH, so a single
+config works on macOS, Linux, Windows native, and Windows + Git Bash.
 
-## Cross-platform support
+## Smoke test (Windows)
 
-All hooks ship in two variants:
+```powershell
+.\integrations\windows-smoke.ps1                  # full check including live copilot session
+.\integrations\windows-smoke.ps1 -SkipLiveSession # skip the premium-request live test
+```
 
-- `coagula-*.sh` (bash) — used on macOS, Linux, Git Bash on Windows
-- `coagula-*.ps1` (PowerShell) — used on Windows PowerShell, with auto-defer
-  to Git Bash if it's on PATH (so the bash impl stays the single source of
-  truth when both are available)
+10 checks: Python, `coagula` on PATH, optional `jq`, funnel runs end-to-
+end on a noisy log, PS hook scripts parse and produce expected JSON,
+`coagula.json` exists with dual-field config, `copilot` on PATH, live
+hook firing, optional Azure OpenAI ping.
 
-Installer scripts write hook configs with **both** `bash` and `powershell`
-command fields, and the Copilot CLI / Claude Code hosts pick the right one
-per-platform automatically. The same config works on macOS, Linux, Windows
-native, and Windows + Git Bash.
-
-## Recommended setup
-
-For maximum coverage:
-
-1. Install the Claude Code bridge → covers Claude Code Bash + VSCode
-   Copilot Chat Bash (same hook script, both hosts pick it up):
-   ```bash
-   ./integrations/claude-code/install.sh --auto-update-settings    # macOS / Linux / Git Bash
-   ```
-   ```powershell
-   .\integrations\claude-code\install.ps1 -AutoUpdateSettings      # Windows PowerShell
-   ```
-
-2. Install the Copilot CLI bridge → adds true universal interception for
-   Copilot CLI sessions:
-   ```bash
-   ./integrations/copilot-cli/install.sh                           # macOS / Linux / Git Bash
-   ```
-   ```powershell
-   .\integrations\copilot-cli\install.ps1                          # Windows PowerShell
-   ```
-
-3. Cross-host MCP fallback → `pip install "coagula[mcp]"` then
-   `claude mcp add coagula coagula-mcp` (Claude Code) /
-   `coagula-mcp` in Claude Desktop or VSCode MCP config. LLM-invoked but
-   works everywhere.
-
-Pull requests welcome for additional hosts as they grow hook-equivalent
-APIs (Cursor, JetBrains AI, etc.).
+No Linux/macOS equivalent yet — walk the same checks manually:
+`coagula --help`, `jq --version`, `cat ~/.copilot/hooks/coagula.json`,
+`tail -f ~/.copilot/logs/*.log` during a session.

@@ -10,18 +10,54 @@ metered input tokens you pay for are the ones that carry signal. Plugs into
 Copilot CLI's hook system for automatic, universal interception (Bash, file
 reads, MCP tool blobs) with zero code changes to the model side.
 
-Built primarily for noisy diagnostic payloads (kubectl JSON, crashloop logs,
-Postgres stats, Azure ARM responses) but works on any context. Also usable as
-a CLI, library, or MCP server from Claude Code, Claude Desktop, and VSCode
-Copilot Chat.
+Also usable as a CLI or library for processing arbitrary noisy payloads
+outside Copilot CLI sessions.
+
+---
+
+## Quick start — GitHub Copilot CLI
+
+Two commands. End state: every tool output above ~2 000 tokens is silently
+funneled through `coagula` before Copilot CLI's model sees (and bills) it.
+
+**macOS / Linux:**
+
+```bash
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.0/coagula-0.5.0-py3-none-any.whl
+curl -fsSL https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.0/coagula-0.5.0-py3-none-any.whl
+iwr -useb https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.ps1 | iex
+```
+
+Verify in a `copilot` session:
+
+```bash
+copilot -p "Run 'cat tests/fixtures/crashloop.log' and tell me the dominant error pattern" \
+  --allow-all-tools --allow-all-paths --no-color
+```
+
+You should see the bash output prefixed with
+`[coagula: 134715 → 37 tok | tool=bash profile=passthrough]` and the model
+should still answer correctly. If you instead see the raw 4 000 lines, jump
+to the [Copilot CLI walkthrough](#copilot-cli-walkthrough) — it covers
+prerequisites (`gh`, `jq`), tuning env vars, and troubleshooting.
+
+Kill switch: `export COAGULA_DISABLE=1` (PowerShell: `$env:COAGULA_DISABLE=1`).
+
+---
 
 ## Why this matters now
 
 GitHub flipped Copilot to **usage-based billing on June 1, 2026**. Every
-Copilot Chat / Copilot CLI premium request now draws from a monthly
-AI Credit budget at the underlying model's API rate — input + output +
-cached tokens, all metered. Heavy diagnostic-tool sessions ("investigate
-this incident", "explain this cluster's state") burn proportionally more.
+Copilot Chat / Copilot CLI premium request now draws from a monthly AI
+Credit budget at the underlying model's API rate — input + output + cached
+tokens, all metered. Heavy diagnostic-tool sessions ("investigate this
+incident", "explain this cluster's state") burn proportionally more.
 
 coagula trims the *input* side of those sessions before the tokens are
 billed. **What gets trimmed, and by how much, depends on payload shape:**
@@ -31,41 +67,29 @@ billed. **What gets trimmed, and by how much, depends on payload shape:**
 | Crashloop / journalctl-style logs with repeated templates | ~99% | Dedup collapses N identical-modulo-timestamp lines to 1 + `(xN)` |
 | Bloated kubectl JSON (`-o json` of a healthy pod) | ~70% | Prune strips `managedFields`, `resourceVersion`, `annotations`, etc. |
 | Structured Postgres / Azure ARM JSON | ~50-80% | Profile-specific denylist + array truncation |
-| Mixed prose / code output (e.g. `cargo build`) | ~10-30% | Limited dedup opportunity; Relevance + Summarize would help if a query is set |
+| Mixed prose / code output (e.g. `cargo build`) | ~10-30% | Limited dedup; Relevance + Summarize need a query set |
 | Pure code, well-structured text | ~5-15% | coagula barely helps — there's not much to compress |
 
-The reductions are real and reproducible — those percentages come from
-running the fixture set under `tests/fixtures/` through the current
-funnel. The percentages **do not directly equal dollar savings**: that
-depends on which model your Copilot session uses (rate per million
-tokens), how often you run noisy-tool-heavy investigations, and whether
-you're on Pro / Pro+ / Business / overage tiers.
-
-**Dollar-savings benchmarks against real Copilot CLI sessions are TBD.**
-I'd rather not put estimated numbers here that I can't back up with
-measurements. If you want to measure on your own workload, a benchmark
-script that runs paired sessions (with / without coagula) and reports
-AI Credit drawdown is on the roadmap; in the meantime you can eyeball
-the per-session token footer Copilot CLI prints to compare.
-
-The mechanics that make any savings possible:
-- The lossless stages (Normalize → Dedup → Prune) run as deterministic
-  Python — milliseconds, no LLM call.
-- Lite mode (the default when no `COAGULA_QUERY` is set) skips the
-  LLM-based stages entirely, so coagula adds no Azure / Ollama spend
-  just to save you Copilot spend.
-- The optional Azure / Ollama tier (Relevance + Summarize) is where
-  quality wins live for known queries; cost-wise it's a wash to
-  small net savings depending on your model choice.
+Reductions are real and reproducible from `tests/fixtures/`. Percentages
+**do not directly equal dollar savings** — that depends on which model your
+Copilot session uses, how often you run noisy-tool investigations, and your
+plan tier. **Real-session dollar benchmarks are TBD.**
 
 For flat-fee plans (Claude Pro, Cursor, Windsurf) the dollar impact is
 zero. You still get faster responses, less context-window pressure, and
 cleaner inputs to the model.
 
+References:
+- [GitHub Copilot is moving to usage-based billing — GitHub Blog](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
+- [Models and pricing for GitHub Copilot — GitHub Docs](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+- ["What a joke": GitHub Copilot's new token-based billing — TechCrunch](https://techcrunch.com/2026/05/30/what-a-joke-github-copilots-new-token-based-billing-spurs-consternation-among-devs/)
+
+---
+
 ## Does compression hurt the answer?
 
 The honest version of "30-99% reduction" is paired with a regression check.
-v0.4.0 ships an in-repo eval harness that measures the answer-accuracy
+coagula ships an in-repo eval harness that measures the answer-accuracy
 delta — does the model still answer correctly when fed the compressed
 context vs the original?
 
@@ -88,203 +112,33 @@ By default the suite uses a deterministic substring-overlap "judge" — good
 enough to catch regressions where compression destroyed the signal-bearing
 line, not a substitute for real-model evaluation. Set `RUN_EVALS=1` (with
 Azure or Ollama configured) to route through a real LLM. Add your own cases
-via `EvalRunner.add_case`; the harness is happy to grade against BFCL /
-SQuAD subsets you supply.
+via `EvalRunner.add_case`.
 
-The harness is also a CI gate: `python -m coagula.evals --fail-on-regression`
-exits non-zero if any case had a funneled-vs-raw accuracy regression.
+CI gate: `python -m coagula.evals --fail-on-regression` exits non-zero if
+any case had a funneled-vs-raw accuracy regression.
 
-**Install (Windows):**
+---
 
-```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
-.\integrations\copilot-cli\install.ps1
-```
-
-**Install (macOS / Linux):**
-
-```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
-./integrations/copilot-cli/install.sh
-```
-
-See [the full Copilot CLI walkthrough](#local-setup-walkthrough-github-copilot-cli)
-below for verification steps.
-
-References:
-- [GitHub Copilot is moving to usage-based billing — GitHub Blog](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
-- [Models and pricing for GitHub Copilot — GitHub Docs](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
-- ["What a joke": GitHub Copilot's new token-based billing — TechCrunch](https://techcrunch.com/2026/05/30/what-a-joke-github-copilots-new-token-based-billing-spurs-consternation-among-devs/)
-
-## Status
-
-**v0.4.0** — Primary integration is **GitHub Copilot CLI** with automatic
-universal interception via the `preToolUse` + `postToolUse` hooks
-(PowerShell on Windows, Bash on macOS/Linux/Git Bash). The same `coagula-mcp`
-server also speaks MCP over stdio so it's usable from Claude Code, Claude
-Desktop, and VSCode 1.99+ Copilot Chat as an explicit `manicure(...)` tool.
-
-The seven-stage funnel (Normalize → Dedup → Prune → Relevance → Summarize →
-Budget → Assemble) runs on the standard library alone. Optional cheap-
-inference backends — **Azure OpenAI** and **Ollama** — slot into the
-Relevance + Summarize stages without changing the funnel's contract. New in
-v0.4.0: an **accuracy-preservation eval harness** (`python -m coagula.evals`)
-that measures the answer-accuracy delta between raw and funneled context, and
-**cache-stable mode** (`COAGULA_CACHE_STABLE=on`) for byte-stable output so
-upstream provider prompt caches actually hit on repeated runs.
-
-≥99% token reduction on the SPEC §11 acceptance scenario with the FATAL
-signal always preserved.
-
-## Install
-
-```bash
-# Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
-
-# With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl"
-
-# Development:
-git clone https://github.com/pat-nel87/coagula.git && cd coagula
-pip install -e ".[dev]"
-pytest
-```
-
-## Use as a CLI
-
-```bash
-python -m coagula.cli \
-  --query "why is the payments pod crashlooping" \
-  --budget 800 --keep 4 --report \
-  tests/fixtures/noisy_mixed.txt
-
-# Pipe real noisy context:
-kubectl get pod <name> -o json | coagula --query "why is this pod failing" --report
-```
-
-## Use as an MCP server (Claude Code / Desktop / VSCode Copilot / Copilot CLI)
-
-The `coagula-mcp` console script speaks MCP over stdio. Register it once and
-the LLM gets two tools: `manicure` (trim a payload) and `retrieve` (pull
-deferred chunks back). Per-tool JSON pruning via `profile="k8s"|"postgres"|"azure"`.
-
-### Claude Code
-
-```bash
-claude mcp add coagula coagula-mcp
-```
-
-### Claude Desktop
-
-In `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "coagula": {
-      "command": "coagula-mcp"
-    }
-  }
-}
-```
-
-### VSCode + GitHub Copilot (1.99+)
-
-In your user `settings.json`:
-
-```json
-{
-  "github.copilot.chat.mcp.servers": {
-    "coagula": {
-      "command": "coagula-mcp"
-    }
-  }
-}
-```
-
-(Replace the key with whatever your Copilot version expects; the SDK transport
-is stdio either way.)
-
-### GitHub Copilot CLI
-
-Add via the interactive `/mcp add` slash command inside a `copilot` session,
-or edit `~/.copilot/mcp-config.json` directly:
-
-```json
-{
-  "servers": {
-    "coagula": {
-      "command": "coagula-mcp"
-    }
-  }
-}
-```
-
-Verify with `/mcp show`. Note that Copilot CLI ALSO supports
-[host hooks](#automatic-interception-via-host-hooks), which give true
-automatic interception — that's usually the better integration path for
-Copilot CLI users. The MCP server is for explicit, LLM-invoked funneling.
-
-### Automatic interception via host hooks
-
-All three major coding-agent hosts now support tool hooks that can transform
-tool calls before/after they reach the model. Coverage per host:
-
-| Host | Hook integration | What gets intercepted |
-|---|---|---|
-| **GitHub Copilot CLI** ≥ 1.0 | [`integrations/copilot-cli/`](./integrations/copilot-cli/) | **Universal** — Bash + view + MCP tool results via `modifiedResult` |
-| Claude Code | [`integrations/claude-code/`](./integrations/claude-code/) | Bash only — `updatedInput` rewrites commands before they run |
-| VSCode + Copilot Chat (agent mode) | [`integrations/vscode-copilot/`](./integrations/vscode-copilot/) — reuses the Claude Code hook (VSCode reads `.claude/settings.json`) | Bash only |
-
-GitHub Copilot CLI is currently the only host that supports modifying tool
-*output* (`postToolUse.modifiedResult`), which makes it the only place
-where reads of huge files, MCP tool blobs, and arbitrary non-Bash tools
-also get funneled automatically.
-
-Quick install:
-
-```bash
-# macOS / Linux / Git Bash:
-./integrations/claude-code/install.sh --auto-update-settings   # Claude Code + VSCode Copilot Chat
-./integrations/copilot-cli/install.sh                          # Copilot CLI universal interception
-```
-
-```powershell
-# Windows PowerShell:
-.\integrations\claude-code\install.ps1 -AutoUpdateSettings
-.\integrations\copilot-cli\install.ps1
-```
-
-The hooks ship with both bash and PowerShell ports. Windows installs auto-defer
-to Git Bash if it's on PATH and fall back to native PowerShell otherwise — one
-config, any platform.
-
-See [integrations/README.md](./integrations/README.md) for the full
-capability matrix and per-host install docs.
-
-### Local setup walkthrough: GitHub Copilot CLI
+## Copilot CLI walkthrough
 
 Step-by-step for setting up automatic context funneling in `copilot` on a
-fresh machine. End state: every noisy tool call (`bash`, `view`, MCP results)
-above 2 000 tokens is silently funneled through `coagula` before the model
-sees it.
+fresh machine. Skip the steps you've already done.
 
-#### 1. Install the GitHub Copilot CLI
+### 1. Install the GitHub Copilot CLI
 
 **macOS / Linux:**
 
 ```bash
 brew install gh
-gh auth login                          # GitHub auth + Copilot subscription
+gh auth login                            # GitHub auth + Copilot subscription
 gh extension install github/copilot-cli  # or: npm i -g @github/copilot-cli
-copilot --version                      # confirm ≥ 1.0
+copilot --version                        # confirm ≥ 1.0
 ```
 
 **Windows** (PowerShell):
 
 ```powershell
-winget install GitHub.cli           # or: scoop install gh
+winget install GitHub.cli                # or: scoop install gh
 gh auth login
 gh extension install github/copilot-cli
 copilot --version
@@ -293,22 +147,15 @@ copilot --version
 If `copilot` isn't on your PATH after `npm` install, add `$(npm prefix -g)/bin`
 to `PATH`. If you're inside an org that disabled hooks, see Troubleshooting.
 
-#### 2. Install `coagula`
+### 2. Install `coagula` (plus `jq` if you'll use the bash hook)
 
 ```bash
-# Released wheel (recommended):
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
-
-# Or editable from a clone:
-git clone https://github.com/pat-nel87/coagula.git
-cd coagula && pip install -e ".[dev]"
-
-# Verify the CLI is on PATH:
-coagula --help
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.0/coagula-0.5.0-py3-none-any.whl
+coagula --help                  # verify on PATH
 ```
 
-You also need `jq` (the hook uses it to parse the JSON Copilot CLI streams
-in — required for the bash path; the PowerShell path doesn't need it):
+`jq` is needed for the bash hook to parse the JSON Copilot CLI streams in;
+PowerShell native users don't need it:
 
 ```bash
 brew install jq            # macOS
@@ -316,9 +163,7 @@ sudo apt install jq        # Debian/Ubuntu
 winget install jqlang.jq   # Windows (only if using Git Bash)
 ```
 
-#### 3. Install both hooks
-
-From inside the `coagula` repo:
+### 3. Install the hook
 
 **macOS / Linux / Git Bash:**
 
@@ -337,10 +182,9 @@ writes `~/.copilot/hooks/coagula.json` with **both** `bash` and `powershell`
 command fields — Copilot CLI auto-picks per platform, and the PowerShell
 hooks themselves further auto-defer to Git Bash if it's on PATH. So a
 single config works on macOS, Linux, Windows native, and Windows + Git
-Bash. Re-run with `--force` (or `-Force` in PS) to overwrite an existing
-config.
+Bash. Re-run with `--force` (or `-Force`) to overwrite an existing config.
 
-#### 4. Verify the hooks fire
+### 4. Verify the hooks fire
 
 ```bash
 copilot -p "Run 'cat tests/fixtures/crashloop.log' and tell me the dominant error pattern" \
@@ -349,21 +193,18 @@ copilot -p "Run 'cat tests/fixtures/crashloop.log' and tell me the dominant erro
 
 What you should see:
 
-- The model's bash call returns a tiny output prefixed with
+- Bash call output prefixed with
   `[coagula: 134715 → 37 tok | tool=bash profile=passthrough]` instead of
   130 KB of log lines.
-- Total `in` tokens in the session footer should be ~60 k, not ~150 k.
-- The answer ("connection refused: upstream postgres unreachable") is still
+- Total `in` tokens in the session footer ~60 k, not ~150 k.
+- The answer ("connection refused: upstream postgres unreachable") still
   correct.
 
-If you instead see the raw 4 000 lines, the hook didn't fire — jump to
-Troubleshooting below.
+If you instead see the raw 4 000 lines, jump to Troubleshooting below.
 
-#### 5. (Optional) Tune for your workflow
+### 5. (Optional) Tune for your workflow
 
-All optional.
-
-macOS / Linux (set in `~/.zshrc` / `~/.bashrc`):
+Set in `~/.zshrc` / `~/.bashrc` (macOS/Linux) or `$PROFILE` (Windows):
 
 ```bash
 export COAGULA_QUERY="default query"        # overrides per-session inference
@@ -372,161 +213,107 @@ export COAGULA_KEEP=5                       # top-K chunks kept by relevance
 export COAGULA_THRESHOLD=2000               # postToolUse skips outputs under this
 export COAGULA_NOISY_PATTERNS="helm|terraform"   # extra preToolUse commands to intercept
 export COAGULA_SKIP_TOOLS="my_internal_tool"     # extra postToolUse tools to bypass
-
-# Kill switch:
-export COAGULA_DISABLE=1
+export COAGULA_DISABLE=1                    # kill switch
 ```
 
-Windows PowerShell (`$PROFILE` or per-session):
+Set `COAGULA_QUERY` per session to whatever you're trying to answer — that
+unlocks the Relevance ranker.
+
+**Lite mode** (default — no `COAGULA_QUERY` / `COAGULA_TASK` set): only the
+lossless stages run (Normalize → Dedup → Prune → Budget → Assemble). Still
+gets 95%+ reduction on log-shaped output via dedup alone. Skips Relevance +
+Summarize entirely so no Azure / Ollama call happens by default.
+
+**Debug log** — every real transform appends one line to
+`~/.copilot/coagula-debug.log` (Windows: `$env:USERPROFILE\.copilot\coagula-debug.log`).
+Passthroughs don't log, so the file is signal-dense. Tail with `tail -f`
+(or `Get-Content -Wait` on Windows). Disable with `COAGULA_DEBUG_LOG=off`.
+
+### Troubleshooting
+
+**First step on any problem (Windows):** run the smoke-test diagnostic. It
+walks 10 checks and tells you exactly what's missing:
 
 ```powershell
-$env:COAGULA_QUERY      = "default query"
-$env:COAGULA_BUDGET     = 2000
-$env:COAGULA_KEEP       = 5
-$env:COAGULA_THRESHOLD  = 2000
-$env:COAGULA_DISABLE    = 1   # kill switch
-```
-
-For per-task queries that improve relevance ranking on specific commands,
-set `COAGULA_QUERY` to whatever question you're trying to answer right
-before you start the `copilot` session.
-
-**Lite mode** — when neither `COAGULA_QUERY` nor `COAGULA_TASK` is set,
-the hooks invoke `coagula` without `--query`, which runs a
-lossless-only funnel (Normalize → Dedup → Prune → Budget → Assemble).
-This still gets 95%+ reduction on log-shaped output via dedup alone, and
-deliberately skips the Relevance + Summarize stages — those need a real
-query to do anything useful, and ranking against a generic placeholder
-string was observed to collapse output to ~1 token in production
-sessions. No Azure or Ollama call happens in lite mode either, so
-default `copilot` usage stays free of per-session backend latency.
-
-**Debug log** — when a hook actually transforms output, it appends a
-single line to `$env:USERPROFILE\.copilot\coagula-debug.log` (or
-`~/.copilot/coagula-debug.log` on macOS/Linux). Tail it during a session
-to verify hooks are firing:
-
-```powershell
-# Windows
-Get-Content $env:USERPROFILE\.copilot\coagula-debug.log -Wait
-
-# macOS / Linux
-tail -f ~/.copilot/coagula-debug.log
-```
-
-Disable logging entirely with `COAGULA_DEBUG_LOG=off`; override the path
-with `COAGULA_DEBUG_LOG=/some/other/path`. Passthroughs (commands that
-didn't match the noisy pattern, or outputs under the threshold) do *not*
-write to the log — only real transforms appear, so the log is signal-dense.
-
-#### 6. (Optional) Add the MCP server too
-
-The hooks cover automatic interception. The MCP server gives the model an
-explicit `manicure(text, query, …)` tool it can invoke deliberately on
-context it knows is noisy (e.g., pasting in a big log block). Useful for
-sessions where you want manual control:
-
-```bash
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl"
-
-# Register with Copilot CLI:
-copilot --add-mcp-server-config '{"servers":{"coagula":{"command":"coagula-mcp"}}}'
-# (or edit ~/.copilot/mcp-config.json directly with the same JSON)
-```
-
-Verify with `/mcp show` inside an interactive `copilot` session.
-
-#### Troubleshooting
-
-**First step on any problem (Windows or macOS/Linux): run the smoke-test
-diagnostic.** It walks 10 checks and tells you exactly what's missing and
-how to fix it:
-
-```powershell
-# Windows:
 .\integrations\windows-smoke.ps1
-
-# Skip the live `copilot` session (if you don't want to burn a premium request):
-.\integrations\windows-smoke.ps1 -SkipLiveSession
+.\integrations\windows-smoke.ps1 -SkipLiveSession   # don't burn a premium request
 ```
 
-There's no Linux/macOS equivalent script yet — the bash hooks have been
-exercised end-to-end against real `copilot` sessions on macOS, and `pytest`
-covers the Python paths. If you hit an issue there, walk the same checks
-manually: `coagula --help`, `jq --version`, `cat ~/.copilot/hooks/coagula.json`,
+No Linux/macOS equivalent script yet — walk the same checks manually:
+`coagula --help`, `jq --version`, `cat ~/.copilot/hooks/coagula.json`,
 `tail -f ~/.copilot/logs/*.log` during a session.
 
 Common specifics:
 
-- **Hook doesn't fire.** Check `%USERPROFILE%\.copilot\logs\` (Windows) or
-  `~/.copilot/logs/` (macOS/Linux) for `preToolUse` / `postToolUse` lines.
-  Common causes: `jq` not installed (only for the bash path), `coagula` not
-  on PATH for the shell `copilot` launched (use absolute paths in
-  `coagula.json` if your shell rc isn't sourced for non-interactive bash).
+- **Hook doesn't fire.** Check `~/.copilot/logs/` (Windows: `%USERPROFILE%\.copilot\logs\`)
+  for `preToolUse` / `postToolUse` lines. Usually `jq` missing (bash path) or
+  `coagula` not on PATH for the shell `copilot` launched (use absolute paths
+  in `coagula.json` if your shell rc isn't sourced for non-interactive bash).
 - **"Permission denied" on the hook script.** macOS/Linux: `chmod +x ~/.copilot/hooks-bin/*.sh`.
   Windows: usually an ExecutionPolicy issue — the installer writes
-  `powershell -ExecutionPolicy Bypass` which should sidestep this, but
-  corporate AppLocker policies can override. Workaround: ask IT to allowlist
-  the hook script path, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
-- **Funneled output is too aggressive / signal lost.** Raise
-  `COAGULA_BUDGET` and `COAGULA_KEEP`, or set `COAGULA_THRESHOLD=10000` so
-  only truly enormous outputs get intercepted.
+  `powershell -ExecutionPolicy Bypass` which should sidestep it, but corporate
+  AppLocker can override. Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+  or ask IT to allowlist the script path.
+- **Funneled output too aggressive / signal lost.** Raise `COAGULA_BUDGET` and
+  `COAGULA_KEEP`, or set `COAGULA_THRESHOLD=10000` so only enormous outputs
+  get intercepted.
 - **Org disabled hooks.** Some GitHub orgs disable Copilot CLI hooks via
-  policy. Workaround: use the cross-host MCP server path (step 6) — it's
-  LLM-invoked, not policy-restricted.
+  policy. Workaround: use the MCP server path below — it's LLM-invoked, not
+  policy-restricted.
 - **Tool repeatedly re-reads the spill file.** Copilot CLI persists original
-  output at `/tmp/copilot-tool-output-*.txt` (or `%TEMP%\copilot-tool-output-*.txt`
-  on Windows); the model may go fetch the raw blob if it doesn't trust the
-  funneled version. Tune `COAGULA_QUERY` to be specific so the funneled
-  result actually contains the signal the model is after.
+  output at `/tmp/copilot-tool-output-*.txt` (Windows: `%TEMP%\copilot-tool-output-*.txt`);
+  the model may go fetch the raw blob if it doesn't trust the funneled
+  version. Tune `COAGULA_QUERY` to be specific so the funneled result
+  actually contains the signal the model is after.
 
-#### What's verified end-to-end (honest status)
+### What's verified end-to-end (honest status)
 
 - **macOS:** Library, CLI, MCP server, Ollama, bash hooks in live Copilot
   CLI session — all verified locally.
-- **Windows + GitHub Copilot CLI:** Verified end-to-end with v0.3.5 on
-  Windows 11 Enterprise + Copilot CLI 1.0.59 + Python 3.13. Hooks fire
-  in live `copilot` sessions, the debug log records transforms, the
-  CLI's lite-mode (no-query) path produces non-empty trimmed output,
-  the Azure OpenAI route succeeds when `AZURE_OPENAI_*` env vars are
-  set, and the install path works without Git Bash present (PowerShell
-  native fallback engages correctly via the WindowsApps WSL-reject
-  guard). The 14-job CI matrix on `windows-latest` covers the same
-  surface continuously.
-- **Windows + Claude Code / VSCode Copilot Chat:** Library + hook config
-  + PS scripts all CI-verified on `windows-latest`. Live session
-  verification on those hosts is still pending — the same hook scripts
-  succeed in real Copilot CLI sessions, so the Bash-only matcher in
-  those hosts is expected to work, but it hasn't been independently
-  reproduced.
-- **Azure OpenAI:** Verified end-to-end against a real tenant (gpt-5.4
-  + gpt-5.4-nano deployments, API version `2024-10-21`). Mocked unit
-  tests run on every push; opt-in integration tests
-  (`RUN_AZURE_TESTS=1` + the four `AZURE_OPENAI_*` env vars) exercise
-  the live wire protocol when credentials are available.
+- **Windows + GitHub Copilot CLI:** Verified end-to-end on Windows 11
+  Enterprise + Copilot CLI 1.0.59 + Python 3.13. Hooks fire in live
+  sessions; Azure OpenAI route succeeds when env vars are set; PowerShell
+  native fallback engages without Git Bash present. CI matrix on
+  `windows-latest` covers the same surface continuously.
+- **Azure OpenAI:** Verified end-to-end against a real tenant (gpt-5.4 +
+  gpt-5.4-nano, API version `2024-10-21`). Mocked unit tests run on every
+  push; opt-in integration tests gate on `RUN_AZURE_TESTS=1`.
 - **Ollama:** Verified end-to-end on macOS with `nomic-embed-text` +
   `llama3.2:3b`. Not yet exercised on Windows.
 
-### Optional: route the funnel's embed + summarize tier through a cheap model
+---
 
-By default `coagula`'s `Relevance` stage uses TF-IDF and `Summarize` is
-extractive — both stdlib, no model call. For better quality on noisy
-diagnostic payloads, route those two stages through a cheaper-than-frontier
-LLM. `coagula-mcp` auto-detects the configured backend at startup with this
-priority: **`COAGULA_BACKEND` override → Azure OpenAI → Ollama → stdlib
-fallback**.
+## Configuration
 
-#### Azure OpenAI (cheap before the frontier model)
+### Environment variables
 
-Designed for the "cheap private compression before Claude / GPT-4" pattern.
-Set the env vars before starting `copilot` (or any MCP-host) and the funnel
-routes through your Azure deployment. **Both the `coagula` CLI and the
-`coagula-mcp` server pick this up automatically** — so the Copilot CLI
-hook pipeline (which shells out to `coagula` on every noisy command) also
-goes through Azure once the env is set.
+| Variable | Purpose | Default |
+|---|---|---|
+| `COAGULA_QUERY` | Per-session query — unlocks Relevance + Summarize stages | (unset → lite mode) |
+| `COAGULA_BUDGET` | Funneled output token cap | 2000 |
+| `COAGULA_KEEP` | Top-K chunks kept by Relevance | 5 |
+| `COAGULA_THRESHOLD` | `postToolUse` skips outputs under this token count | 2000 |
+| `COAGULA_NOISY_PATTERNS` | Extra `preToolUse` Bash commands to intercept (regex) | (built-in list) |
+| `COAGULA_SKIP_TOOLS` | Extra `postToolUse` tools to bypass | (built-in skiplist) |
+| `COAGULA_DISABLE` | Kill switch — hooks no-op | (off) |
+| `COAGULA_BACKEND` | Force backend: `azure`, `ollama`, `fallback` | (auto) |
+| `COAGULA_CACHE_STABLE` | Force `temperature=0` on LLM hooks so output is byte-stable across identical inputs — required for upstream provider prompt caches (Anthropic ~90% / OpenAI ~50% discount on cached input tokens) to hit. Truthy: `on`, `1`, `yes`, `true`, `enabled`. | off |
+| `COAGULA_WORKSPACE_KEY` | DeferredStore scoping key for embedded library users running coagula across multiple project dirs in one process | process CWD |
+| `COAGULA_DEBUG_LOG` | Override path, or `off` to disable | `~/.copilot/coagula-debug.log` |
+| `OLLAMA_HOST` / `COAGULA_EMBED_MODEL` / `COAGULA_LLM_MODEL` | Ollama overrides | see below |
+| `AZURE_OPENAI_*` | Azure deployment selection | see below |
+
+### Optional: route Relevance + Summarize through a cheap LLM
+
+By default `Relevance` uses TF-IDF and `Summarize` is extractive — both
+stdlib, no model call. For better quality on noisy diagnostic payloads,
+route those two stages through a cheaper-than-frontier LLM. The `coagula`
+CLI auto-detects at startup with this priority: **`COAGULA_BACKEND`
+override → Azure OpenAI → Ollama → stdlib fallback**.
+
+**Azure OpenAI:**
 
 ```powershell
-# Windows PowerShell — same names work in bash via `export`:
 $env:AZURE_OPENAI_ENDPOINT         = "https://my-resource.openai.azure.com"
 $env:AZURE_OPENAI_API_KEY          = "..."
 $env:AZURE_OPENAI_LLM_DEPLOYMENT   = "gpt-5.4-nano"           # or gpt-4o-mini
@@ -534,73 +321,34 @@ $env:AZURE_OPENAI_EMBED_DEPLOYMENT = "text-embedding-3-small" # optional
 $env:AZURE_OPENAI_API_VERSION      = "2024-10-21"             # optional
 ```
 
-The `LLM_DEPLOYMENT` is required for the funnel to wire Azure; the
-`EMBED_DEPLOYMENT` is optional — without it, `Relevance` keeps its TF-IDF
-fallback.
+`LLM_DEPLOYMENT` is required to wire Azure; `EMBED_DEPLOYMENT` is optional
+(Relevance keeps TF-IDF without it). Both factories accept a `fallback`
+callable that fires on Azure errors so transient outages degrade to TF-IDF
+rather than crashing.
 
-**Cost shape** on the SPEC §11 noisy_mixed scenario (135k input tokens
-reduces to ~700 output tokens):
-
-| Stage | Token cost | Where |
-|---|---|---|
-| Normalize / Dedup / Prune (lossless) | $0 | deterministic, stdlib |
-| Relevance + Summarize via Azure deployment | depends on rate × the ~1.3k tokens reaching Summarize | Azure |
-| Frontier model (Claude / GPT-4) input | ~700 tokens of cleaned context | the actual win |
-
-The Azure-tier cost per session is small relative to the frontier-model
-input savings, but exact dollar figures depend on your deployment's
-per-million-token rate. Measure before committing to a budget — see the
-"Why this matters now" note about benchmark numbers being TBD.
-
-**Library usage** (without the MCP server):
-
-```python
-from coagula import default_funnel
-from coagula.models.azure_openai import make_embedder, make_llm
-
-embed = make_embedder("text-embedding-3-small",
-                      endpoint="https://my-resource.openai.azure.com",
-                      api_key=os.environ["AZURE_OPENAI_API_KEY"])
-llm   = make_llm("gpt-5.4-nano",
-                 endpoint="https://my-resource.openai.azure.com",
-                 api_key=os.environ["AZURE_OPENAI_API_KEY"])
-funnel = default_funnel(embedder=embed, llm=llm, max_tokens=2000, keep=5)
-```
-
-Both factories accept a `fallback` callable that fires on Azure errors (401,
-timeout, missing deployment) so a transient Azure outage degrades to TF-IDF
-rather than crashing the funnel.
-
-#### Ollama (local + offline)
+**Ollama** (local + offline):
 
 ```bash
-# Install (macOS):
-brew install --cask ollama-app
-open -a Ollama
+brew install --cask ollama-app && open -a Ollama
 ollama pull nomic-embed-text llama3.2:3b
-
-# The coagula-mcp server auto-detects Ollama and wires it in.
-# Override defaults:
-#   OLLAMA_HOST=http://localhost:11434
-#   COAGULA_EMBED_MODEL=nomic-embed-text
-#   COAGULA_LLM_MODEL=llama3.2:3b
+# Override defaults via OLLAMA_HOST, COAGULA_EMBED_MODEL, COAGULA_LLM_MODEL.
 ```
 
-Auto-detection picks **Azure first** when both Azure env vars and a reachable
-Ollama are present. Force a specific backend with `COAGULA_BACKEND=azure`,
-`ollama`, or `fallback`.
+---
 
-#### Operational environment variables
+## Use as a CLI
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `COAGULA_BACKEND` | Force backend: `azure`, `ollama`, or `fallback` | (auto) |
-| `COAGULA_CACHE_STABLE` | Force `temperature=0` on optional LLM hooks so funnel output is byte-stable across identical inputs — required for upstream provider prompt caches (Anthropic ~90% / OpenAI ~50% discount on cached input tokens) to hit. Truthy values: `on`, `1`, `yes`, `true`, `enabled`. | off |
-| `COAGULA_WORKSPACE_KEY` | DeferredStore scoping key for long-lived MCP server processes serving multiple project dirs. Prevents cross-workspace chunk leaks via colliding `request_id`s. | process CWD |
-| `OLLAMA_HOST` / `COAGULA_EMBED_MODEL` / `COAGULA_LLM_MODEL` | Ollama overrides | see above |
-| `AZURE_OPENAI_*` | Azure deployment selection | see above |
+```bash
+python -m coagula.cli \
+  --query "why is the payments pod crashlooping" \
+  --budget 800 --keep 4 --report \
+  tests/fixtures/noisy_mixed.txt
 
-## Use as a library (embed in your own MCP tool)
+# Pipe real noisy context:
+kubectl get pod <name> -o json | coagula --query "why is this pod failing" --report
+```
+
+## Use as a library
 
 ```python
 from coagula.mcp import coagula_payload, ChunkSpec
@@ -621,6 +369,24 @@ print(result.deferred_manifest)    # what got demoted, retrievable by id
 print(result.report)               # per-stage savings table
 ```
 
+Or wire the backends directly:
+
+```python
+import os
+from coagula import default_funnel
+from coagula.models.azure_openai import make_embedder, make_llm
+
+embed = make_embedder("text-embedding-3-small",
+                      endpoint="https://my-resource.openai.azure.com",
+                      api_key=os.environ["AZURE_OPENAI_API_KEY"])
+llm   = make_llm("gpt-5.4-nano",
+                 endpoint="https://my-resource.openai.azure.com",
+                 api_key=os.environ["AZURE_OPENAI_API_KEY"])
+funnel = default_funnel(embedder=embed, llm=llm, max_tokens=2000, keep=5)
+```
+
+---
+
 ## Design
 
 Stages run in fixed order, cheap-before-expensive:
@@ -629,31 +395,43 @@ Stages run in fixed order, cheap-before-expensive:
 normalize → dedup → prune → relevance → summarize → budget → assemble
 ```
 
-Everything is **demote, not delete**: pruned chunks become `DEFERRED` and are
-retrievable on demand via the `DeferredStore` / `retrieve` MCP tool.
-`CRITICAL` chunks are sacrosanct — never demoted, never dropped. Severity
-pinning at ingestion (`severity="FATAL"|"ERROR"` → `CRITICAL`) is the
-correctness guarantee that compensates for an imperfect relevance ranker.
+Everything is **demote, not delete**: pruned chunks become `DEFERRED` and
+are retrievable on demand via `DeferredStore`. `CRITICAL` chunks are
+sacrosanct — never demoted, never dropped. Severity pinning at ingestion
+(`severity="FATAL"|"ERROR"` → `CRITICAL`) is the correctness guarantee
+that compensates for an imperfect relevance ranker.
 
 See `SPEC.md` for the full contract.
 
 ## What this isn't
 
-- **Not an automatic interceptor when used purely as an MCP server.** MCP
-  tools are LLM-invoked. For automatic interception (no model effort),
-  use the host hooks under `integrations/` — GitHub Copilot CLI gets
-  universal coverage; Claude Code and VSCode Copilot Chat get Bash-only.
+- **Not a coding-agent universal tool.** v0.5.0 is Copilot-CLI-specific.
+  Claude Code and VSCode Copilot Chat use flat-fee plans with large
+  context windows, so the dollar/window-pressure motivation for compression
+  doesn't apply. Earlier versions shipped Claude Code / VSCode hooks and
+  an MCP server; both were removed in v0.5.0 to focus on the one host that
+  actually benefits — see `v0.4.0` if you need those.
 - **Not a vector DB / RAG store.** The funnel is stateless per request
   except for the per-request deferred store.
 - **No telemetry, no network egress on the default path.** Ollama is local;
-  the MCP server is stdio.
+  hooks invoke the local `coagula` binary over stdio.
+
+## Status
+
+**v0.5.0** — Scoped exclusively to **GitHub Copilot CLI** via host hooks
+(PowerShell on Windows, Bash on macOS/Linux/Git Bash). The seven-stage
+funnel runs on stdlib alone; Azure OpenAI and Ollama are optional drop-in
+backends. The accuracy-preservation eval harness and cache-stable mode
+shipped in v0.4.0 carry over. Claude Code / VSCode Copilot Chat hook
+integrations and the `coagula-mcp` MCP server were removed in this release
+to reduce maintenance surface for a target audience that didn't benefit
+from them.
 
 ## License
 
 `coagula` is licensed under the [Apache License, Version 2.0](./LICENSE).
 See [NOTICE](./NOTICE) for attribution requirements.
 
-In short:
 - Free for any use — personal, commercial, hosted, embedded.
 - Modify and redistribute freely; keep the copyright + NOTICE.
 - Patent grant from contributors; patent retaliation if you sue.

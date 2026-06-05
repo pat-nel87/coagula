@@ -5,9 +5,8 @@ signatures on ``coagula.default_funnel`` / ``Relevance`` / ``Summarize``.
 They are strictly optional — the funnel runs on stdlib alone.
 
 This module also exposes ``build_hooks_from_env()`` which picks a backend
-from environment variables. Both the standalone CLI (``coagula``) and the
-MCP server (``coagula-mcp``) call it at startup so the same configuration
-works for both invocation paths.
+from environment variables. The standalone CLI (``coagula``) calls it at
+startup so the same configuration applies anywhere the funnel runs.
 """
 
 from __future__ import annotations
