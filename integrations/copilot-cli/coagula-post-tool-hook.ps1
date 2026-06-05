@@ -1,31 +1,18 @@
 # GitHub Copilot CLI postToolUse universal interceptor (PowerShell port).
 #
-# Mirrors coagula-post-tool-hook.sh. Catches the result of any tool above a
-# token threshold and replaces it via modifiedResult so the model only sees
-# the funneled version.
+# Mirrors coagula-post-tool-hook.sh. Catches the result of any tool above
+# the per-tool token threshold (or session cumulative threshold) and
+# replaces it via modifiedResult so the model only sees the funneled
+# version.
 #
 # AUTO-DETECT: if Git Bash is available AND the .sh sibling exists, defers
 # to the bash implementation (single source of truth). Otherwise does the
 # work natively in PowerShell.
 #
-# Wire it up via ~/.copilot/hooks/coagula.json with BOTH bash and powershell
-# fields — the Copilot CLI host auto-picks per platform:
-#
-#   {
-#     "version": 1,
-#     "hooks": {
-#       "postToolUse": [
-#         {
-#           "type": "command",
-#           "bash":       "/path/to/coagula-post-tool-hook.sh",
-#           "powershell": "powershell -NoProfile -File C:\\path\\to\\coagula-post-tool-hook.ps1"
-#         }
-#       ]
-#     }
-#   }
-#
-# Env knobs match the bash version: COAGULA_QUERY, COAGULA_BUDGET, COAGULA_KEEP,
-# COAGULA_THRESHOLD, COAGULA_SKIP_TOOLS, COAGULA_DISABLE.
+# Env knobs match the bash version: COAGULA_QUERY, COAGULA_BUDGET,
+# COAGULA_KEEP, COAGULA_THRESHOLD (overrides per-tool defaults),
+# COAGULA_CUMULATIVE_THRESHOLD, COAGULA_SKIP_TOOLS, COAGULA_DISABLE,
+# COAGULA_DEBUG_LOG.
 
 [CmdletBinding()]
 param()
@@ -42,15 +29,10 @@ $ErrorActionPreference = 'Stop'
 function Test-SafeBash {
     param([string]$BashPath)
     if (-not $BashPath) { return $false }
-    # Hard reject known WSL launcher locations before invocation. The
-    # WindowsApps reject is critical on Win11 — that's the default Store
-    # stub location and a uname probe there can hang or prompt.
     if ($BashPath -match '\\System32\\(bash|wsl)\.exe$') { return $false }
     if ($BashPath -match '\\WindowsApps\\') { return $false }
     $onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
     if (-not $onWindows) { return $true }
-    # Secondary safety on Windows: a bash binary in some unexpected
-    # location that turns out to be WSL/cmder/etc. -> uname -s tells us.
     try {
         $u = & $BashPath -c 'uname -s' 2>$null
         return ($u -match '^(MINGW|CYGWIN|MSYS)')
@@ -60,9 +42,6 @@ function Test-SafeBash {
 $siblingSh = Join-Path $PSScriptRoot 'coagula-post-tool-hook.sh'
 $bashExe   = Get-Command bash -ErrorAction SilentlyContinue
 if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
-    # Read stdin, forward to the bash impl, return its stdout verbatim.
-    # Convert backslashes -> forward slashes; Git Bash handles C:/... but
-    # backslashes get interpreted as escapes and silently strip the path.
     $stdin = [Console]::In.ReadToEnd()
     $siblingForBash = $siblingSh -replace '\\','/'
     $stdin | & $bashExe.Source $siblingForBash
@@ -71,18 +50,108 @@ if ($bashExe -and (Test-Path $siblingSh) -and (Test-SafeBash $bashExe.Source)) {
 
 # ---- Native PowerShell implementation -------------------------------------
 
-# Read stdin payload from Copilot CLI.
 $raw = [Console]::In.ReadToEnd()
 
-function Out-NoOp { Write-Output '{}'; exit 0 }
+# ---- Logging — every decision exit goes through Write-Decision ------------
+$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { '' }
+$script:LogPath = if ($env:COAGULA_DEBUG_LOG) {
+    $env:COAGULA_DEBUG_LOG
+} elseif ($homeDir) {
+    Join-Path $homeDir '.copilot/coagula-debug.log'
+} else {
+    ''
+}
 
-if ($env:COAGULA_DISABLE -eq '1') { Out-NoOp }
-if (-not (Get-Command coagula -ErrorAction SilentlyContinue)) { Out-NoOp }
+function Write-Decision {
+    param([string]$Message)
+    if (-not $script:LogPath) { return }
+    if (@('off','OFF','disabled','DISABLED','0') -contains $script:LogPath) { return }
+    $line = "$(Get-Date -Format 'o') [post-tool] $Message"
+    Add-Content -LiteralPath $script:LogPath -Value $line -ErrorAction SilentlyContinue
+}
+
+function Out-NoOp {
+    param([string]$LogMessage = '')
+    if ($LogMessage) { Write-Decision -Message $LogMessage }
+    Write-Output '{}'
+    exit 0
+}
+
+# ---- Per-tool threshold table — matches bash impl -------------------------
+function Get-ThresholdForTool {
+    param([string]$Tool)
+    if ($env:COAGULA_THRESHOLD) { return [int]$env:COAGULA_THRESHOLD }
+    switch -Regex ($Tool) {
+        '^(bash|shell|powershell|read_powershell)$' { return 2000 }
+        '^(view|read|read_file|str_replace_based_edit_tool)$' { return 500 }
+        '^(mcp:|.*__)' { return 1000 }
+        default        { return 1500 }
+    }
+}
+
+# ---- Session state — per-PPID cumulative token counter --------------------
+# Stored as a JSON file keyed on parent process ID (the copilot CLI process).
+# Atomic writes via tmp + Move-Item to avoid torn reads.
+$sessionDir  = if ($homeDir) { Join-Path $homeDir '.copilot/coagula-session-state' } else { $null }
+$ppid        = $PID  # for this PS process; we'll resolve parent below
+try {
+    $parent = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue).ParentProcessId
+    if ($parent) { $ppid = $parent }
+} catch { }
+$sessionFile = if ($sessionDir) { Join-Path $sessionDir "$ppid.json" } else { $null }
+$cumulativeThreshold = if ($env:COAGULA_CUMULATIVE_THRESHOLD) {
+    [int]$env:COAGULA_CUMULATIVE_THRESHOLD
+} else { 8000 }
+
+function Get-SessionTotal {
+    if (-not $sessionFile -or -not (Test-Path -LiteralPath $sessionFile)) { return 0 }
+    try {
+        $obj = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
+        $now = [int][double]::Parse((Get-Date -UFormat %s))
+        if (-not $obj.updated_at -or ($now - [int]$obj.updated_at) -gt 3600) { return 0 }
+        return [int]$obj.total_tokens
+    } catch { return 0 }
+}
+
+function Add-SessionTokens {
+    param([int]$Tokens)
+    if (-not $sessionFile -or -not $sessionDir) { return 0 }
+    if (-not (Test-Path -LiteralPath $sessionDir)) {
+        New-Item -ItemType Directory -Force -Path $sessionDir -ErrorAction SilentlyContinue | Out-Null
+    }
+    $prev = Get-SessionTotal
+    $total = $prev + $Tokens
+    $now   = [int][double]::Parse((Get-Date -UFormat %s))
+    $tmp   = "$sessionFile.tmp.$PID"
+    try {
+        @{ updated_at = $now; total_tokens = $total } |
+            ConvertTo-Json -Compress |
+            Set-Content -LiteralPath $tmp -Encoding UTF8 -ErrorAction Stop
+        Move-Item -LiteralPath $tmp -Destination $sessionFile -Force -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
+    return $total
+}
+
+# Best-effort cleanup of stale session files (~2% of calls).
+if ((Get-Random -Maximum 50) -eq 0 -and $sessionDir -and (Test-Path -LiteralPath $sessionDir)) {
+    Get-ChildItem -LiteralPath $sessionDir -Filter '*.json' -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) } |
+        Remove-Item -ErrorAction SilentlyContinue
+}
+
+# ---- Early-exit guards ----------------------------------------------------
+if ($env:COAGULA_DISABLE -eq '1') { Out-NoOp 'disabled (COAGULA_DISABLE=1)' }
+if (-not (Get-Command coagula -ErrorAction SilentlyContinue)) {
+    Out-NoOp 'coagula-missing (not on PATH — hooks are no-ops, install coagula globally to fix)'
+}
 
 try {
     $payload = $raw | ConvertFrom-Json -ErrorAction Stop
 } catch {
-    Out-NoOp
+    # No log — too noisy for non-tool events.
+    Write-Output '{}'; exit 0
 }
 
 $toolName   = [string]$payload.toolName
@@ -91,40 +160,53 @@ $resultText = [string]$payload.toolResult.textResultForLlm
 
 if ([string]::IsNullOrEmpty($toolName) -or
     [string]::IsNullOrEmpty($resultText) -or
-    $resultType -ne 'success') { Out-NoOp }
-
-# Always-skipped internal bookkeeping tools (match the bash impl).
-$alwaysSkip = @('report_intent', 'sql', 'notification')
-if ($alwaysSkip -contains $toolName) { Out-NoOp }
-if ($toolName -like 'todo_*') { Out-NoOp }
-
-if ($env:COAGULA_SKIP_TOOLS) {
-    $extra = $env:COAGULA_SKIP_TOOLS -split ',' | ForEach-Object { $_.Trim() }
-    if ($extra -contains $toolName) { Out-NoOp }
+    $resultType -ne 'success') {
+    Write-Output '{}'; exit 0
 }
 
-# Threshold check (chars / 4 token estimate — matches coagula.tokens fallback).
-$threshold = if ($env:COAGULA_THRESHOLD) { [int]$env:COAGULA_THRESHOLD } else { 2000 }
+# Always-skipped internal bookkeeping tools.
+$alwaysSkip = @('report_intent', 'sql', 'notification')
+if ($alwaysSkip -contains $toolName -or $toolName -like 'todo_*') {
+    Out-NoOp "skipped (tool=$toolName reason=internal-bookkeeping)"
+}
+
+# User-configured extra skips.
+if ($env:COAGULA_SKIP_TOOLS) {
+    $extra = $env:COAGULA_SKIP_TOOLS -split ',' | ForEach-Object { $_.Trim() }
+    if ($extra -contains $toolName) {
+        Out-NoOp "skipped (tool=$toolName reason=user-skip-list)"
+    }
+}
+
 $resultChars  = $resultText.Length
 $resultTokens = [int]($resultChars / 4)
-if ($resultTokens -lt $threshold) { Out-NoOp }
+$perCallThreshold = Get-ThresholdForTool -Tool $toolName
 
-# Idempotency guard: skip if the result already looks like coagula output.
+# Idempotency guard: skip if the result already looks like coagula's output.
 $head = if ($resultChars -ge 200) { $resultText.Substring(0, 200) } else { $resultText }
-if ($head -match '(?m)^### ') { Out-NoOp }
+if ($head -match '(?m)^### ') {
+    Out-NoOp "skipped (tool=$toolName reason=already-funneled)"
+}
 
-# Derive query — empty means lite mode (omit --query so the CLI skips
-# Relevance + Summarize against a meaningless string).
+# ---- Threshold decision: per-call OR cumulative-trigger -------------------
+$sessionTotal  = Get-SessionTotal
+$triggerReason = $null
+
+if ($resultTokens -ge $perCallThreshold) {
+    $triggerReason = "per-call($resultTokens>=$perCallThreshold)"
+} elseif ($cumulativeThreshold -gt 0 -and ($sessionTotal + $resultTokens) -ge $cumulativeThreshold) {
+    $triggerReason = "cumulative($sessionTotal+$resultTokens>=$cumulativeThreshold)"
+} else {
+    $newTotal = Add-SessionTokens -Tokens $resultTokens
+    Out-NoOp "under-threshold (tool=$toolName tokens=$resultTokens per_call=$perCallThreshold cumulative=$newTotal/$cumulativeThreshold)"
+}
+
+# ---- Profile auto-detection for shell-family tools ------------------------
 $query = $env:COAGULA_QUERY
 if ([string]::IsNullOrEmpty($query)) { $query = $env:COAGULA_TASK }
 
-# Profile auto-detection for shell-family tools. Without this, Windows
-# `kubectl` calls (toolName='powershell') would funnel with the empty
-# passthrough denylist instead of the k8s denylist that does the actual
-# pruning work. Matches the pre-tool hook's toolName allowlist.
 $profile = 'passthrough'
 if (@('bash','shell','powershell') -contains $toolName) {
-    # toolArgs may be either a JSON string or a parsed object.
     $argsObj = $null
     if ($payload.toolArgs -is [string]) {
         try { $argsObj = $payload.toolArgs | ConvertFrom-Json -ErrorAction Stop } catch {}
@@ -142,58 +224,41 @@ if (@('bash','shell','powershell') -contains $toolName) {
 $budget = if ($env:COAGULA_BUDGET) { [int]$env:COAGULA_BUDGET } else { 2000 }
 $keep   = if ($env:COAGULA_KEEP)   { [int]$env:COAGULA_KEEP }   else { 5 }
 
-# Funnel via the coagula CLI. On any error, fall through to no-op.
-# Omit --query when empty so the CLI runs lite mode.
+# ---- Funnel via the coagula CLI ------------------------------------------
 try {
     if ([string]::IsNullOrEmpty($query)) {
         $cleanedRaw = $resultText | & coagula --profile $profile --budget $budget --keep $keep 2>$null
     } else {
         $cleanedRaw = $resultText | & coagula --query $query --profile $profile --budget $budget --keep $keep 2>$null
     }
-    if ($LASTEXITCODE -ne 0) { Out-NoOp }
+    if ($LASTEXITCODE -ne 0) {
+        Out-NoOp "funnel-error (tool=$toolName exit=$LASTEXITCODE) — passing through unchanged"
+    }
 } catch {
-    Out-NoOp
+    Out-NoOp "funnel-exception (tool=$toolName) — passing through unchanged"
 }
 
-# PowerShell captures multi-line external-command stdout as an
-# Object[] (one element per output line) — NOT as a single string.
-# Without an explicit -join, three things break together:
-#   1. `$cleaned.Length` returns line count, not char count → reported
-#      token counts are off by orders of magnitude (the "X -> 1 tok"
-#      log entries every Windows user has been seeing).
-#   2. `if ($cleaned.Length -ge $resultChars)` compares line-count to
-#      char-count → the not-actually-smaller guard never triggers, so
-#      garbled output always gets swapped in.
-#   3. `"[coagula: ...]`n$cleaned"` stringifies the array with SPACE
-#      separators, collapsing all the `### source\n\ncontent` newlines
-#      to spaces. The model sees structural headers inline with content.
-# The Bash version is fine — $(cmd) captures as a single string.
-# Always -join so downstream code works on real char counts and newlines.
-if ($null -eq $cleanedRaw) { Out-NoOp }
+# PowerShell captures multi-line external-command stdout as an Object[]
+# (one element per line) — NOT as a single string. Always -join so
+# downstream char-count guards work on real characters not line counts.
+if ($null -eq $cleanedRaw) {
+    Out-NoOp "funnel-empty (tool=$toolName)"
+}
 $cleaned = if ($cleanedRaw -is [array]) { $cleanedRaw -join "`n" } else { [string]$cleanedRaw }
-if ([string]::IsNullOrEmpty($cleaned)) { Out-NoOp }
+if ([string]::IsNullOrEmpty($cleaned)) {
+    Out-NoOp "funnel-empty (tool=$toolName)"
+}
 
-# Skip the swap if not actually smaller (in chars, not lines).
-if ($cleaned.Length -ge $resultChars) { Out-NoOp }
+if ($cleaned.Length -ge $resultChars) {
+    Out-NoOp "funnel-noop (tool=$toolName reason=no-shrink in=$resultChars`c out=$($cleaned.Length)c)"
+}
 
 $cleanedTokens = [int]($cleaned.Length / 4)
+$newTotal = Add-SessionTokens -Tokens $cleanedTokens
+
 $finalText = "[coagula: $resultTokens -> $cleanedTokens tok | tool=$toolName profile=$profile]`n$cleaned"
 
-# Debug log — append-only, transform-only entries. Disable with
-# COAGULA_DEBUG_LOG=off, override path with COAGULA_DEBUG_LOG=<path>.
-# Default: ~/.copilot/coagula-debug.log (silently no-ops if dir missing).
-$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { '' }
-$logPath = if ($env:COAGULA_DEBUG_LOG) {
-    $env:COAGULA_DEBUG_LOG
-} elseif ($homeDir) {
-    Join-Path $homeDir '.copilot/coagula-debug.log'
-} else {
-    ''
-}
-if (@('off','OFF','disabled','DISABLED','0') -notcontains $logPath) {
-    $msg = "$(Get-Date -Format 'o') [post-tool] funneled (tool=$toolName profile=$profile): $resultTokens -> $cleanedTokens tok"
-    Add-Content -LiteralPath $logPath -Value $msg -ErrorAction SilentlyContinue
-}
+Write-Decision -Message "fired (tool=$toolName profile=$profile in=$resultTokens out=$cleanedTokens reason=$triggerReason cumulative=$newTotal)"
 
 $response = @{
     modifiedResult = @{

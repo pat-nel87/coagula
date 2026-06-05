@@ -23,14 +23,14 @@ funneled through `coagula` before Copilot CLI's model sees (and bills) it.
 **macOS / Linux:**
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.1/coagula-0.5.1-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.6.0/coagula-0.6.0-py3-none-any.whl
 curl -fsSL https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.1/coagula-0.5.1-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.6.0/coagula-0.6.0-py3-none-any.whl
 iwr -useb https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.ps1 | iex
 ```
 
@@ -150,7 +150,7 @@ to `PATH`. If you're inside an org that disabled hooks, see Troubleshooting.
 ### 2. Install `coagula` (plus `jq` if you'll use the bash hook)
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.1/coagula-0.5.1-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.6.0/coagula-0.6.0-py3-none-any.whl
 coagula --help                  # verify on PATH
 ```
 
@@ -210,19 +210,75 @@ Set in `~/.zshrc` / `~/.bashrc` (macOS/Linux) or `$PROFILE` (Windows):
 export COAGULA_QUERY="default query"        # overrides per-session inference
 export COAGULA_BUDGET=2000                  # funneled output token cap
 export COAGULA_KEEP=5                       # top-K chunks kept by relevance
-export COAGULA_THRESHOLD=2000               # postToolUse skips outputs under this
 export COAGULA_NOISY_PATTERNS="helm|terraform"   # extra preToolUse commands to intercept
 export COAGULA_SKIP_TOOLS="my_internal_tool"     # extra postToolUse tools to bypass
 export COAGULA_DISABLE=1                    # kill switch
 ```
 
-Set `COAGULA_QUERY` per session to whatever you're trying to answer — that
-unlocks the Relevance ranker.
+#### Thresholds (v0.6.0+)
+
+Two layers control when the postToolUse hook actually fires.
+
+**Per-tool defaults** (don't usually need to change):
+
+| Tool type | Default token threshold |
+|---|---|
+| `bash` / `shell` / `powershell` | 2000 |
+| `view` / `read` / `read_file` | **500** |
+| MCP tools (`mcp:*` / `*__*`) | 1000 |
+| Other tools | 1500 |
+
+Why per-tool: a 1KB `bash` output is usually a real answer (version probes,
+ls), but a 1KB `view` output is often paginated noise that compresses 60-80%.
+The lower view threshold was empirically validated on real Windows Copilot
+CLI sessions before being promoted.
+
+Override globally with `COAGULA_THRESHOLD=<n>` (replaces every per-tool
+default with that single number — useful for A/B testing).
+
+**Cumulative session tracking** catches the death-by-a-thousand-cuts case
+where a model makes many sub-threshold `view_range` or `grep` calls that
+individually slip through:
+
+```bash
+export COAGULA_CUMULATIVE_THRESHOLD=8000   # default; 0 disables
+```
+
+State lives in `~/.copilot/coagula-session-state/<ppid>.json` (per copilot
+process). Once the session total crosses the threshold, subsequent
+sub-threshold calls get funneled too. Entries older than 1h are pruned.
 
 **Lite mode** (default — no `COAGULA_QUERY` / `COAGULA_TASK` set): only the
 lossless stages run (Normalize → Dedup → Prune → Budget → Assemble). Still
 gets 95%+ reduction on log-shaped output via dedup alone. Skips Relevance +
 Summarize entirely so no Azure / Ollama call happens by default.
+
+#### Reading the debug log
+
+v0.6.0+ logs every postToolUse decision (not just successful funnelings).
+Tail it to see your actual firing rate:
+
+```bash
+tail -f ~/.copilot/coagula-debug.log
+```
+
+Each line categorizes the verdict:
+
+| Tag | Meaning |
+|---|---|
+| `fired` | Compression happened; line shows `in=X out=Y reason=...` |
+| `under-threshold` | Call was below the threshold (per-call AND cumulative) — passed through |
+| `skipped` | Tool was on the skip list (internal bookkeeping or `COAGULA_SKIP_TOOLS`) |
+| `funnel-noop` | Funnel ran but couldn't shrink — original passed through |
+| `coagula-missing` | `coagula` not on PATH; hooks are no-ops. **Install coagula globally to fix.** |
+| `disabled` | `COAGULA_DISABLE=1` set |
+
+If you see lots of `under-threshold` and few `fired`, your workload is
+mostly small-tool-output and per-call thresholds don't catch it. The
+cumulative-trigger should kick in eventually; if not, lower
+`COAGULA_CUMULATIVE_THRESHOLD`. If you see `coagula-missing`, the hooks
+are running but doing nothing — install coagula in a Python that's on the
+shell's PATH (not just in a venv).
 
 **Debug log** — every real transform appends one line to
 `~/.copilot/coagula-debug.log` (Windows: `$env:USERPROFILE\.copilot\coagula-debug.log`).
@@ -294,7 +350,8 @@ Common specifics:
 | `COAGULA_QUERY` | Per-session query — unlocks Relevance + Summarize stages | (unset → lite mode) |
 | `COAGULA_BUDGET` | Funneled output token cap | 2000 |
 | `COAGULA_KEEP` | Top-K chunks kept by Relevance | 5 |
-| `COAGULA_THRESHOLD` | `postToolUse` skips outputs under this token count | 2000 |
+| `COAGULA_THRESHOLD` | Override per-tool default thresholds with one global number. Unset: per-tool defaults (bash 2000, view 500, MCP 1000, other 1500). | (per-tool table) |
+| `COAGULA_CUMULATIVE_THRESHOLD` | Session-level token total above which sub-threshold calls also get funneled. Catches paginated `view_range`/`grep` patterns. 0 disables. | 8000 |
 | `COAGULA_NOISY_PATTERNS` | Extra `preToolUse` Bash commands to intercept (regex) | (built-in list) |
 | `COAGULA_SKIP_TOOLS` | Extra `postToolUse` tools to bypass | (built-in skiplist) |
 | `COAGULA_DISABLE` | Kill switch — hooks no-op | (off) |
@@ -420,14 +477,24 @@ See `SPEC.md` for the full contract.
 
 ## Status
 
-**v0.5.0** — Scoped exclusively to **GitHub Copilot CLI** via host hooks
+**v0.6.0** — Per-tool thresholds (bash 2000, view 500, MCP 1000) replace
+the single global default — increases firing rate on paginated `view_range`
+and small-tool-output patterns without harming response quality. Cumulative
+session tracking catches death-by-a-thousand-cuts: once total tool-output
+tokens cross `COAGULA_CUMULATIVE_THRESHOLD` (default 8000), subsequent
+sub-threshold calls also funnel. Every postToolUse decision now writes a
+debug-log line categorizing the verdict (`fired`/`under-threshold`/`skipped`
+/etc.), so actual firing rate is finally observable — see "Reading the debug
+log" above. 12 new integration tests validate the bash hook end-to-end
+with synthetic Copilot CLI payloads.
+
+**v0.5.x** scoped coagula exclusively to GitHub Copilot CLI via host hooks
 (PowerShell on Windows, Bash on macOS/Linux/Git Bash). The seven-stage
 funnel runs on stdlib alone; Azure OpenAI and Ollama are optional drop-in
-backends. The accuracy-preservation eval harness and cache-stable mode
-shipped in v0.4.0 carry over. Claude Code / VSCode Copilot Chat hook
-integrations and the `coagula-mcp` MCP server were removed in this release
-to reduce maintenance surface for a target audience that didn't benefit
-from them.
+backends. Claude Code / VSCode Copilot Chat hook integrations and the
+`coagula-mcp` MCP server were removed to reduce maintenance surface for a
+target audience that didn't benefit from them. The accuracy-preservation
+eval harness and cache-stable mode shipped in v0.4.0 carry over.
 
 ## License
 
