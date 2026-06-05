@@ -4,13 +4,16 @@
   <img src=".github/assets/coagula-mascot.png" alt="A robed pixel-art character at a control console feeding noisy data through a funnel labeled TRIM / DEDUP / PRUNE / RANK / COMPRESS, with the tagline 'Less Noise. More Signal. Lower Costs.'" width="420">
 </p>
 
-A local **context manicuring funnel**: trim, dedup, prune, rank, and compress
-context *before* it reaches an expensive frontier LLM call, so most tokens are
-killed by cheap deterministic logic and only what survives is spent on
-inference.
+**The local context-funnel for GitHub Copilot CLI.** Trims, dedups, prunes,
+ranks, and compresses noisy tool output *before* the model sees it — so the
+metered input tokens you pay for are the ones that carry signal. Plugs into
+Copilot CLI's hook system for automatic, universal interception (Bash, file
+reads, MCP tool blobs) with zero code changes to the model side.
 
 Built primarily for noisy diagnostic payloads (kubectl JSON, crashloop logs,
-Postgres stats, Azure ARM responses) but works on any context.
+Postgres stats, Azure ARM responses) but works on any context. Also usable as
+a CLI, library, or MCP server from Claude Code, Claude Desktop, and VSCode
+Copilot Chat.
 
 ## Why this matters now
 
@@ -59,17 +62,49 @@ For flat-fee plans (Claude Pro, Cursor, Windsurf) the dollar impact is
 zero. You still get faster responses, less context-window pressure, and
 cleaner inputs to the model.
 
+## Does compression hurt the answer?
+
+The honest version of "30-99% reduction" is paired with a regression check.
+v0.4.0 ships an in-repo eval harness that measures the answer-accuracy
+delta — does the model still answer correctly when fed the compressed
+context vs the original?
+
+```bash
+python -m coagula.evals
+```
+
+Output:
+
+```
+CASE                      COMPRESSION   RAW  FUNNELED  DELTA
+------------------------------------------------------------
+crashloop-fatal                 99.9%    OK        OK  =
+k8s-crashloop                   93.8%    OK        OK  =
+
+raw accuracy: 2/2   funneled accuracy: 2/2   regressions: 0
+```
+
+By default the suite uses a deterministic substring-overlap "judge" — good
+enough to catch regressions where compression destroyed the signal-bearing
+line, not a substitute for real-model evaluation. Set `RUN_EVALS=1` (with
+Azure or Ollama configured) to route through a real LLM. Add your own cases
+via `EvalRunner.add_case`; the harness is happy to grade against BFCL /
+SQuAD subsets you supply.
+
+The harness is also a CI gate: `python -m coagula.evals --fail-on-regression`
+exits non-zero if any case had a funneled-vs-raw accuracy regression.
+
 **Install (Windows):**
 
 ```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
 .\integrations\copilot-cli\install.ps1
 ```
 
 **Install (macOS / Linux):**
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
 ./integrations/copilot-cli/install.sh
 ```
 
@@ -83,23 +118,32 @@ References:
 
 ## Status
 
-**v0.3.11** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
-MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
-1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
-interception via PowerShell/Bash host hooks). Optional cheap-inference
-backends: **Azure OpenAI** (e.g. `gpt-5.4-nano`) and **Ollama** (local).
-Runs on the standard library alone — both backends and the MCP SDK are
-optional extras. ≥99% token reduction on the SPEC §11 acceptance scenario
-with the FATAL signal always preserved.
+**v0.4.0** — Primary integration is **GitHub Copilot CLI** with automatic
+universal interception via the `preToolUse` + `postToolUse` hooks
+(PowerShell on Windows, Bash on macOS/Linux/Git Bash). The same `coagula-mcp`
+server also speaks MCP over stdio so it's usable from Claude Code, Claude
+Desktop, and VSCode 1.99+ Copilot Chat as an explicit `manicure(...)` tool.
+
+The seven-stage funnel (Normalize → Dedup → Prune → Relevance → Summarize →
+Budget → Assemble) runs on the standard library alone. Optional cheap-
+inference backends — **Azure OpenAI** and **Ollama** — slot into the
+Relevance + Summarize stages without changing the funnel's contract. New in
+v0.4.0: an **accuracy-preservation eval harness** (`python -m coagula.evals`)
+that measures the answer-accuracy delta between raw and funneled context, and
+**cache-stable mode** (`COAGULA_CACHE_STABLE=on`) for byte-stable output so
+upstream provider prompt caches actually hit on repeated runs.
+
+≥99% token reduction on the SPEC §11 acceptance scenario with the FATAL
+signal always preserved.
 
 ## Install
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula
@@ -253,7 +297,7 @@ to `PATH`. If you're inside an org that disabled hooks, see Troubleshooting.
 
 ```bash
 # Released wheel (recommended):
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.2.0/coagula-0.2.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl
 
 # Or editable from a clone:
 git clone https://github.com/pat-nel87/coagula.git
@@ -383,7 +427,7 @@ context it knows is noisy (e.g., pasting in a big log block). Useful for
 sessions where you want manual control:
 
 ```bash
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.2.0/coagula-0.2.0-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.4.0/coagula-0.4.0-py3-none-any.whl"
 
 # Register with Copilot CLI:
 copilot --add-mcp-server-config '{"servers":{"coagula":{"command":"coagula-mcp"}}}'
