@@ -36,7 +36,28 @@
 #   COAGULA_DISABLE              set to "1" to bypass the hook entirely.
 #   COAGULA_DEBUG_LOG            path for the decision log; "off" disables.
 
-set -euo pipefail
+# NOTE: deliberately NOT using `set -e`. The hook does many jq/file-state
+# operations that can fail in interesting ways (concurrent writes, weird
+# paths, jq parse hiccups on unexpected payloads). With -e, ANY non-zero
+# exit propagates to Copilot CLI as a HookExitCodeError, which loses
+# all the careful `|| true` defensive handling sprinkled below. -u and
+# -o pipefail still catch unset-var bugs and pipeline failures.
+set -uo pipefail
+
+# Defensive backstop: if we somehow exit with non-zero anyway (signal,
+# arithmetic-on-empty, etc.), emit a clean passthrough so Copilot never
+# sees HookExitCodeError. The decision log captures the failure for
+# post-hoc debugging.
+_emit_clean_failure() {
+  local rc=$?
+  if (( rc != 0 )); then
+    # _log may not be defined yet on early failures; ignore failures here.
+    type _log >/dev/null 2>&1 && _log "unexpected-error (exit=$rc) — passing through unchanged"
+    echo '{}'
+    exit 0
+  fi
+}
+trap _emit_clean_failure EXIT
 
 input=$(cat)
 
@@ -157,21 +178,22 @@ _mark_nudge_sent() {
 }
 
 # File summary cache: returns cached summary text for a path, or empty.
+# Lookup via --arg to avoid path characters breaking the jq query.
 _get_cached_summary() {
   local path="$1"
-  _state_get ".summaries[\"${path}\"]" ''
+  [[ -f "$session_file" ]] || { echo ""; return; }
+  local now
+  now=$(date +%s)
+  local val
+  val=$(jq -r --argjson now "$now" --arg path "$path" '
+    if ((.updated_at // 0) | tonumber) < ($now - 3600)
+    then "" else (.summaries[$path] // "")
+    end' "$session_file" 2>/dev/null) || val=""
+  printf '%s' "$val"
 }
 
-_set_cached_summary() {
-  local path="$1" summary="$2"
-  # Encode summary as a JSON arg to avoid quoting issues.
-  _state_update "
-    .summaries = (.summaries // {}) | .summaries[\$path] = \$summary
-  " --arg path "$path" --arg summary "$summary"
-  # Note: _state_update signature only takes one arg; inline manually here.
-}
-
-# Direct override of _set_cached_summary since the helper signature is limited.
+# Atomic write of summary cache entry. --arg path/summary keeps the jq
+# query free of shell-injection / quoting hazards from file paths.
 _set_cached_summary() {
   local path="$1" summary="$2" now tmp current
   mkdir -p "$session_dir" 2>/dev/null || true
