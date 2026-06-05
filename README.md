@@ -23,14 +23,14 @@ funneled through `coagula` before Copilot CLI's model sees (and bills) it.
 **macOS / Linux:**
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.0/coagula-0.5.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.1/coagula-0.5.1-py3-none-any.whl
 curl -fsSL https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.0/coagula-0.5.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.1/coagula-0.5.1-py3-none-any.whl
 iwr -useb https://raw.githubusercontent.com/pat-nel87/coagula/main/integrations/copilot-cli/install.ps1 | iex
 ```
 
@@ -150,7 +150,7 @@ to `PATH`. If you're inside an org that disabled hooks, see Troubleshooting.
 ### 2. Install `coagula` (plus `jq` if you'll use the bash hook)
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.0/coagula-0.5.0-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.5.1/coagula-0.5.1-py3-none-any.whl
 coagula --help                  # verify on PATH
 ```
 
