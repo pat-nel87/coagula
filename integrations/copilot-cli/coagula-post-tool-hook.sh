@@ -349,18 +349,21 @@ if _is_view_tool "$tool_name"; then
     _log "nudge-injected (tool=$tool_name view_count=$view_count)"
   fi
 
-  # B.3: cached file summary
+  # B.3: cached file summary — inject ONLY on the FIRST view of each file
+  # per session. v0.7.2 injected on every call which added ~180 tokens of
+  # overhead per view; on 20-view paginated workloads that was 3.6k extra
+  # tokens with no behavior change (counterbalanced n=4 test showed +15%
+  # credits). Injecting once gives the model the pattern up-front; it
+  # either heeds it (savings) or ignores it (~one-time cost).
   if [[ "$summary_inject" != "off" ]]; then
     file_path=$(_extract_file_path)
     if [[ -n "$file_path" ]]; then
       cached=$(_get_cached_summary "$file_path")
       if [[ -n "$cached" ]]; then
-        summary_text="[coagula summary of ${file_path}:
-${cached}
---- requested slice below ---]"
-        _log "summary-cached (tool=$tool_name file=$file_path)"
+        # Already injected once — passthrough, no re-injection.
+        _log "summary-already-shown (tool=$tool_name file=$file_path)"
       else
-        # First view of this file — try to compute.
+        # First view of this file — try to compute + inject.
         computed=$(_try_compute_summary "$file_path")
         if [[ -n "$computed" ]]; then
           _set_cached_summary "$file_path" "$computed"
@@ -369,6 +372,8 @@ ${computed}
 --- requested slice below ---]"
           _log "summary-computed (tool=$tool_name file=$file_path summary_chars=${#computed})"
         else
+          # Mark as seen-but-not-summarizable so we don't recompute every call.
+          _set_cached_summary "$file_path" "(not dedupable)"
           _log "summary-skipped (tool=$tool_name file=$file_path reason=not-dedupable-or-too-large)"
         fi
       fi

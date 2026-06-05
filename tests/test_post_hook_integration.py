@@ -462,8 +462,11 @@ def test_summary_not_injected_when_file_not_dedupable(tmp_path):
 
 
 @needs_coagula
-def test_summary_cached_across_view_calls_on_same_file(tmp_path):
-    """Second view on same file uses cached summary; doesn't re-compute."""
+def test_summary_injected_only_on_first_view_per_file(tmp_path):
+    """v0.7.3: summary is injected ONCE per file per session, not every call.
+    Re-injecting on every view added ~180 tokens × N calls of overhead with
+    no behavior change — measured at +15% credits on n=4 counterbalanced
+    paginated test. First view: inject. Subsequent views: passthrough."""
     fixture = tmp_path / "fake-crashloop.log"
     fixture.write_text(_dedup_able(500))
 
@@ -473,17 +476,22 @@ def test_summary_cached_across_view_calls_on_same_file(tmp_path):
         "COAGULA_CUMULATIVE_THRESHOLD": "0",
         "HOME": str(tmp_path),
     }
-    # First call computes
-    _run_hook(_view_payload("line one", str(fixture)), env)
-    # Second call should hit the cache
-    out, log = _run_hook(_view_payload("line two", str(fixture)), env)
-    assert "modifiedResult" in out
-    log_lines = log.splitlines()
-    assert any("summary-cached" in l for l in log_lines), (
-        "second call should hit cache, not recompute"
+    # First call: summary computed AND injected
+    out1, _ = _run_hook(_view_payload("line one", str(fixture)), env)
+    assert "modifiedResult" in out1
+    assert "[coagula summary of" in out1["modifiedResult"]["textResultForLlm"]
+
+    # Second call on same file: must NOT re-inject — passthrough.
+    out2, log = _run_hook(_view_payload("line two", str(fixture)), env)
+    assert out2 == {}, (
+        f"second view on same file must not re-inject summary; got: {out2}"
     )
+    log_lines = log.splitlines()
     assert sum(1 for l in log_lines if "summary-computed" in l) == 1, (
         "summary should only be computed once per file per session"
+    )
+    assert any("summary-already-shown" in l for l in log_lines), (
+        "second call should log 'summary-already-shown'"
     )
 
 
