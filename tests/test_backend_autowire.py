@@ -283,3 +283,114 @@ def test_cli_invokes_build_hooks_from_env(monkeypatch, tmp_path):
     assert "embedder" in captured_kwargs and "llm" in captured_kwargs
     assert captured_kwargs["embedder"] is None
     assert captured_kwargs["llm"] is None
+
+
+# ---------------------------------------------------------------------------
+# Cache-stable mode (v0.3.11)
+# ---------------------------------------------------------------------------
+
+
+def test_cache_stable_off_by_default(monkeypatch):
+    from coagula.models import _cache_stable_enabled
+    monkeypatch.delenv("COAGULA_CACHE_STABLE", raising=False)
+    assert _cache_stable_enabled() is False
+
+
+def test_cache_stable_on_via_truthy_values(monkeypatch):
+    from coagula.models import _cache_stable_enabled
+    for val in ("on", "1", "yes", "true", "ON", "Enabled"):
+        monkeypatch.setenv("COAGULA_CACHE_STABLE", val)
+        assert _cache_stable_enabled() is True, f"value {val!r} should enable"
+
+
+def test_cache_stable_off_via_falsy_values(monkeypatch):
+    from coagula.models import _cache_stable_enabled
+    for val in ("off", "0", "no", "false", "", "disabled"):
+        monkeypatch.setenv("COAGULA_CACHE_STABLE", val)
+        assert _cache_stable_enabled() is False, f"value {val!r} should disable"
+
+
+def test_cache_stable_forces_zero_temperature_on_azure_llm(monkeypatch):
+    """When cache-stable is on, the Azure LLM factory should be invoked with
+    temperature=0.0 so repeated identical inputs produce identical output."""
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "k")
+    monkeypatch.setenv("AZURE_OPENAI_LLM_DEPLOYMENT", "gpt-nano")
+    monkeypatch.setenv("COAGULA_CACHE_STABLE", "on")
+    _mock_azure_reachable(monkeypatch)
+
+    captured: dict = {}
+    from coagula.models import azure_openai as az_mod
+
+    real_make_llm = az_mod.make_llm
+
+    def spy_make_llm(*args, **kwargs):
+        captured.update(kwargs)
+        return real_make_llm(*args, **kwargs)
+
+    monkeypatch.setattr(az_mod, "make_llm", spy_make_llm)
+
+    from coagula.models import build_hooks_from_env
+    embedder, llm = build_hooks_from_env()
+    assert llm is not None
+    assert captured.get("temperature") == 0.0, (
+        f"cache-stable should force temperature=0; got kwargs={captured}"
+    )
+
+
+def test_azure_default_temperature_when_cache_stable_off(monkeypatch):
+    """Sanity: without cache-stable, the Azure llm gets the non-zero default
+    (0.1) so the existing behavior is preserved."""
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "k")
+    monkeypatch.setenv("AZURE_OPENAI_LLM_DEPLOYMENT", "gpt-nano")
+    monkeypatch.delenv("COAGULA_CACHE_STABLE", raising=False)
+    _mock_azure_reachable(monkeypatch)
+
+    captured: dict = {}
+    from coagula.models import azure_openai as az_mod
+
+    real_make_llm = az_mod.make_llm
+
+    def spy_make_llm(*args, **kwargs):
+        captured.update(kwargs)
+        return real_make_llm(*args, **kwargs)
+
+    monkeypatch.setattr(az_mod, "make_llm", spy_make_llm)
+
+    from coagula.models import build_hooks_from_env
+    _, llm = build_hooks_from_env()
+    assert llm is not None
+    # Without cache-stable, temperature should be 0.1 (the documented default).
+    assert captured.get("temperature") == 0.1
+
+
+def test_funnel_output_byte_stable_on_stdlib_path():
+    """The stdlib funnel path (no LLM hooks) MUST be byte-deterministic for
+    any chance at provider prompt cache hits on repeated identical inputs.
+    Validates the documented claim in the cache-stable section.
+    """
+    from coagula import default_funnel
+    from coagula.cli import chunk_text
+
+    text = (
+        "FATAL: payments pod down\n\n"
+        + "\n".join(
+            f"2026-01-15T12:00:0{i}Z payments[{1000+i}] ERROR connection refused"
+            for i in range(20)
+        )
+        + "\n\nsome unrelated runbook text " * 30
+    )
+
+    def run_once():
+        funnel = default_funnel(max_tokens=500, keep=3, embedder=None, llm=None)
+        out = funnel.run(chunk_text(text), "why down", budget=500)
+        return next(c for c in out if c.source == "assembled").text
+
+    first = run_once()
+    second = run_once()
+    third = run_once()
+    assert first == second == third, (
+        "stdlib funnel output is not byte-stable across runs — cache-stable "
+        "mode cannot deliver provider cache hits"
+    )

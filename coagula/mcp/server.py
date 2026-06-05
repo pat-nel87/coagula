@@ -72,6 +72,14 @@ def build_app():
 
     embedder, llm = _build_hooks()
 
+    # Workspace identity for DeferredStore scoping (v0.3.11).
+    # COAGULA_WORKSPACE_KEY overrides; otherwise CWD at server startup.
+    # Multi-workspace deployments (one server, several project dirs) get
+    # isolation; single-workspace (the common case) gets a stable key
+    # that prevents cross-process leak if the server is somehow shared.
+    _workspace_key = os.environ.get("COAGULA_WORKSPACE_KEY") or os.getcwd()
+    log.info("DeferredStore workspace_key=%s", _workspace_key)
+
     @mcp.tool()
     def manicure(
         text: str,
@@ -103,6 +111,7 @@ def build_app():
             llm=llm,
             store=_STORE,
             extra_critical_patterns=extra_critical_patterns,
+            workspace_key=_workspace_key,
         )
         return {
             "prompt": result.prompt,
@@ -116,8 +125,13 @@ def build_app():
     def retrieve(request_id: str, ids: list[str]) -> dict:
         """Pull specific deferred chunks back by id. Use after a `manicure`
         call when the assembled prompt referenced a deferred chunk you need
-        full text for. Returns one entry per matched id."""
-        chunks = _STORE.retrieve(request_id, ids)
+        full text for. Returns one entry per matched id.
+
+        Scoped to the server's workspace_key — only chunks stored by this
+        server process's manicure calls are retrievable.
+        """
+        chunks = _STORE.retrieve(request_id, ids, workspace_key=_workspace_key)
+        manifest = _STORE.manifest(request_id, workspace_key=_workspace_key)
         return {
             "chunks": [
                 {
@@ -128,7 +142,7 @@ def build_app():
                 }
                 for c in chunks
             ],
-            "missing": [i for i in ids if i not in {m["id"] for m in _STORE.manifest(request_id)}],
+            "missing": [i for i in ids if i not in {m["id"] for m in manifest}],
         }
 
     return mcp

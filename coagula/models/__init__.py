@@ -79,6 +79,10 @@ def _try_azure_openai() -> tuple[Callable | None, Callable | None] | None:
         "Wiring Azure OpenAI: endpoint=%s embed=%s llm=%s api_version=%s",
         endpoint, embed_dep or "(none)", llm_dep or "(none)", api_version,
     )
+    # When cache-stable mode is on, force temperature=0 so the LLM's output
+    # is deterministic — required for provider prompt cache hits to land on
+    # repeated identical inputs.
+    llm_temperature = 0.0 if _cache_stable_enabled() else 0.1
     embedder = (
         az.make_embedder(embed_dep, endpoint, api_key, api_version=api_version,
                          fallback=_azure_embed_fallback)
@@ -86,7 +90,8 @@ def _try_azure_openai() -> tuple[Callable | None, Callable | None] | None:
     )
     llm = (
         az.make_llm(llm_dep, endpoint, api_key, api_version=api_version,
-                    fallback=_azure_llm_fallback)
+                    fallback=_azure_llm_fallback,
+                    temperature=llm_temperature)
         if llm_dep else None
     )
     return embedder, llm
@@ -105,10 +110,33 @@ def _try_ollama() -> tuple[Callable | None, Callable | None] | None:
     embed_model = os.environ.get("COAGULA_EMBED_MODEL", "nomic-embed-text")
     llm_model = os.environ.get("COAGULA_LLM_MODEL", "llama3.2:3b")
     log.info("Wiring Ollama: embed=%s, llm=%s, host=%s", embed_model, llm_model, host)
+    # Ollama's temperature default is 0.7 in many models; cache-stable mode
+    # forces 0 for repeatable output. (Ollama embedder is already
+    # deterministic; only the llm needs the toggle.)
+    llm_kwargs: dict = {"model": llm_model, "host": host}
+    if _cache_stable_enabled():
+        llm_kwargs["temperature"] = 0.0
     return (
         ol.make_embedder(model=embed_model, host=host),
-        ol.make_llm(model=llm_model, host=host),
+        ol.make_llm(**llm_kwargs),
     )
+
+
+def _cache_stable_enabled() -> bool:
+    """Return True when the user has opted into cache-stable mode.
+
+    Cache-stable mode (``COAGULA_CACHE_STABLE=on``) forces deterministic
+    behavior in optional LLM hooks so the funnel's output is byte-stable
+    across repeated identical inputs — required for downstream provider
+    prompt caches to hit (Anthropic 90%, OpenAI 50% discount on cached
+    input tokens).
+
+    The stdlib path (Normalize / Dedup / Prune / TF-IDF Relevance /
+    extractive Summarize) is already deterministic; this flag only
+    matters when Azure or Ollama backends are wired.
+    """
+    val = (os.environ.get("COAGULA_CACHE_STABLE") or "").strip().lower()
+    return val in ("on", "1", "yes", "true", "enabled")
 
 
 def build_hooks_from_env() -> tuple[Callable | None, Callable | None]:

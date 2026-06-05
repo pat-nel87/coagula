@@ -83,6 +83,7 @@ def coagula_payload(
     request_id: str | None = None,
     store: DeferredStore | None = None,
     extra_critical_patterns: list[str] | None = None,
+    workspace_key: str = "",
 ) -> CoagulaResult:
     """Run the default funnel on a list of tool-supplied chunks.
 
@@ -91,8 +92,12 @@ def coagula_payload(
     `extra_critical_patterns` (regex preferred, substring fallback) →
     CRITICAL. Everything else starts RELEVANT.
 
-    Stores deferred chunks in `store` (auto-creates one if not provided) so
-    the LLM can request them later via the `retrieve` tool / call.
+    Stores deferred chunks in `store` (auto-creates one if not provided)
+    under ``(workspace_key, request_id)`` so the LLM can request them
+    later via the `retrieve` tool / call. ``workspace_key`` defaults to
+    ``""`` for backward compat; multi-workspace deployments (long-lived
+    MCP server serving multiple projects) should set it to a stable
+    project/session identifier to prevent cross-workspace leaks.
     """
     rid = request_id or uuid.uuid4().hex
     if store is None:
@@ -128,12 +133,12 @@ def coagula_payload(
 
     assembled = next(c for c in out if c.source == "assembled")
     deferred = [c for c in out if c.tier == Tier.DEFERRED]
-    store.put(rid, deferred)
+    store.put(rid, deferred, workspace_key=workspace_key)
 
     return CoagulaResult(
         prompt=assembled.text,
         request_id=rid,
-        deferred_manifest=store.manifest(rid),
+        deferred_manifest=store.manifest(rid, workspace_key=workspace_key),
         report=funnel.report(),
         deferred_ids=[chunk_id(c) for c in deferred],
     )

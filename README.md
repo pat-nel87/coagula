@@ -62,14 +62,14 @@ cleaner inputs to the model.
 **Install (Windows):**
 
 ```powershell
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.10/coagula-0.3.10-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl
 .\integrations\copilot-cli\install.ps1
 ```
 
 **Install (macOS / Linux):**
 
 ```bash
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.10/coagula-0.3.10-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl
 ./integrations/copilot-cli/install.sh
 ```
 
@@ -83,7 +83,7 @@ References:
 
 ## Status
 
-**v0.3.10** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
+**v0.3.11** — Seven-stage funnel, CLI, MCP adapter library, and a standalone
 MCP server (`coagula-mcp`) usable from Claude Code, Claude Desktop, VSCode
 1.99+ with GitHub Copilot, and **GitHub Copilot CLI** (with automatic
 interception via PowerShell/Bash host hooks). Optional cheap-inference
@@ -96,10 +96,10 @@ with the FATAL signal always preserved.
 
 ```bash
 # Library + CLI only:
-pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.10/coagula-0.3.10-py3-none-any.whl
+pip install https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl
 
 # With MCP server:
-pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.10/coagula-0.3.10-py3-none-any.whl"
+pip install "coagula[mcp] @ https://github.com/pat-nel87/coagula/releases/download/v0.3.11/coagula-0.3.11-py3-none-any.whl"
 
 # Development:
 git clone https://github.com/pat-nel87/coagula.git && cd coagula
@@ -545,6 +545,16 @@ ollama pull nomic-embed-text llama3.2:3b
 Auto-detection picks **Azure first** when both Azure env vars and a reachable
 Ollama are present. Force a specific backend with `COAGULA_BACKEND=azure`,
 `ollama`, or `fallback`.
+
+#### Operational environment variables
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `COAGULA_BACKEND` | Force backend: `azure`, `ollama`, or `fallback` | (auto) |
+| `COAGULA_CACHE_STABLE` | Force `temperature=0` on optional LLM hooks so funnel output is byte-stable across identical inputs — required for upstream provider prompt caches (Anthropic ~90% / OpenAI ~50% discount on cached input tokens) to hit. Truthy values: `on`, `1`, `yes`, `true`, `enabled`. | off |
+| `COAGULA_WORKSPACE_KEY` | DeferredStore scoping key for long-lived MCP server processes serving multiple project dirs. Prevents cross-workspace chunk leaks via colliding `request_id`s. | process CWD |
+| `OLLAMA_HOST` / `COAGULA_EMBED_MODEL` / `COAGULA_LLM_MODEL` | Ollama overrides | see above |
+| `AZURE_OPENAI_*` | Azure deployment selection | see above |
 
 ## Use as a library (embed in your own MCP tool)
 
