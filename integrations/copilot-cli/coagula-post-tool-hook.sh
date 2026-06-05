@@ -228,13 +228,16 @@ fi
 # common field names. Returns empty if none match.
 # ---------------------------------------------------------------------------
 _extract_file_path() {
+  # Copilot CLI passes toolArgs as a JSON STRING for some tools (view,
+  # bash) and as an object for others. Handle both shapes, then try
+  # common field names since the schema isn't fully documented.
   printf '%s' "$input" | jq -r '
-    .toolArgs.path
-    // .toolArgs.filename
-    // .toolArgs.file
-    // .toolArgs.target_file
-    // .toolArgs.target
-    // empty' 2>/dev/null
+    (if (.toolArgs | type) == "string"
+     then (.toolArgs | fromjson? // {})
+     else (.toolArgs // {})
+     end)
+    | (.path // .filename // .file // .target_file // .target // empty)
+  ' 2>/dev/null
 }
 
 # Try to compute a coagula summary of the given file path. Returns:
@@ -292,6 +295,7 @@ fi
 tool_name=$(printf '%s' "$input" | jq -r '.toolName // empty')
 result_type=$(printf '%s' "$input" | jq -r '.toolResult.resultType // empty')
 result_text=$(printf '%s' "$input" | jq -r '.toolResult.textResultForLlm // empty')
+
 
 # Silent passthrough for non-tool / unsuccessful events.
 if [[ -z "$tool_name" || -z "$result_text" || "$result_type" != "success" ]]; then

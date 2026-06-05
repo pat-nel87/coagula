@@ -504,6 +504,35 @@ def test_summary_disabled_via_env(tmp_path):
 
 
 @needs_coagula
+def test_summary_extracts_path_from_string_shaped_toolargs(tmp_path):
+    """Copilot CLI passes view's toolArgs as a JSON STRING, not an object.
+    The extractor must fromjson-decode strings before looking up fields.
+    Regression test for the v0.7.0 bug where summary never fired in real
+    Copilot sessions because path extraction returned empty."""
+    fixture = tmp_path / "fake.log"
+    fixture.write_text(_dedup_able(500))
+
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    # The real Copilot CLI shape: toolArgs is a STRING containing JSON.
+    payload = {
+        "toolName": "view",
+        "toolArgs": json.dumps({"path": str(fixture), "view_range": [1, 1]}),
+        "toolResult": {"resultType": "success", "textResultForLlm": "line", "exitCode": 0},
+    }
+    out, log = _run_hook(payload, env)
+    assert "modifiedResult" in out, (
+        f"summary should inject from string-shaped toolArgs; log:\n{log}"
+    )
+    assert "[coagula summary of" in out["modifiedResult"]["textResultForLlm"]
+    assert "summary-computed" in log
+
+
+@needs_coagula
 def test_summary_skipped_when_file_path_undetectable(tmp_path):
     """If toolArgs has no recognized path field, summary path is skipped
     silently (no error)."""
