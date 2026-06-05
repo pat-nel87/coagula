@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # GitHub Copilot CLI postToolUse universal interceptor.
 #
-# Catches the result of any tool call. If the result exceeds the per-tool
-# threshold (or the session cumulative threshold), runs it through coagula
-# and returns the cleaned version via `modifiedResult` so the model only
-# sees the funneled version.
+# Three responsibilities:
+#
+# 1. Funnel large tool outputs through coagula when they exceed per-tool
+#    or cumulative thresholds (the core feature since v0.3).
+# 2. Nudge model away from paginated `view_range` patterns toward bulk
+#    bash commands that funnel automatically (v0.7+).
+# 3. Cache + inject a coagula summary of viewed files when the file
+#    content is dedup-friendly, so the model can stop paginating early
+#    (v0.7+).
 #
 # Copilot CLI is currently the only major host whose postToolUse supports
-# `modifiedResult`, which makes true universal interception possible — the
-# reason coagula's v0.5+ line is Copilot-CLI-specific.
+# `modifiedResult`, which makes true universal interception possible —
+# the reason coagula's v0.5+ line is Copilot-CLI-specific.
 #
-# Wire it up with ~/.copilot/hooks/coagula.json — see install.sh.
+# Wire up with ~/.copilot/hooks/coagula.json — see install.sh.
 #
 # Env knobs (all optional):
 #   COAGULA_QUERY                query string passed to coagula; if unset,
@@ -22,14 +27,14 @@
 #                                (bash 2000, view/read 500, MCP 1000).
 #   COAGULA_CUMULATIVE_THRESHOLD once a session's total tool-output tokens
 #                                pass this, start funneling even sub-threshold
-#                                calls (catches paginated view-range patterns).
-#                                Default: 8000. Set to 0 to disable.
+#                                calls. Default 8000. 0 disables.
+#   COAGULA_VIEW_NUDGE_AFTER     fire the multi-view nudge after N view-like
+#                                tool calls per session. Default 4. 0 disables.
+#   COAGULA_SUMMARY_INJECT       set to "off" to disable file-summary
+#                                injection on view tool calls. Default on.
 #   COAGULA_SKIP_TOOLS           extra comma-separated tool names to bypass.
-#                                Always-skipped: report_intent, sql, todo_*,
-#                                notification.
 #   COAGULA_DISABLE              set to "1" to bypass the hook entirely.
 #   COAGULA_DEBUG_LOG            path for the decision log; "off" disables.
-#                                Default: $HOME/.copilot/coagula-debug.log.
 
 set -euo pipefail
 
@@ -50,16 +55,7 @@ _log() {
 }
 
 # ---------------------------------------------------------------------------
-# Per-tool threshold table. The single-global COAGULA_THRESHOLD env var
-# overrides everything; otherwise pick based on tool name.
-#
-# Defaults are tuned to firing-rate, not just compression efficiency:
-# - bash/shell/powershell stay at 2000 — most small bash outputs are
-#   genuinely small (file existence checks, version probes, ls).
-# - view/read/read_file drop to 500 — paginated view_range chunks are
-#   typically 5-15KB of repetitive content that dedups 60-80%.
-# - MCP tools (heuristic: name contains "mcp:" or "__") at 1000 — middle
-#   ground; MCP returns are often structured JSON that prunes well.
+# Per-tool threshold table. COAGULA_THRESHOLD env var overrides everything.
 # ---------------------------------------------------------------------------
 _threshold_for_tool() {
   if [[ -n "${COAGULA_THRESHOLD:-}" ]]; then
@@ -74,48 +70,187 @@ _threshold_for_tool() {
   esac
 }
 
+_is_view_tool() {
+  case "$1" in
+    view|read|read_file|str_replace_based_edit_tool) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
-# Session state — per-PPID cumulative token counter so we can funnel
-# paginated reads whose individual calls slip under the per-call threshold.
-#
-# State lives in ~/.copilot/coagula-session-state/<PPID>.json. Keyed by the
-# parent process (i.e. the copilot CLI process), so each interactive
-# session gets its own counter. TTL: entries older than 1h are pruned.
-# Atomic writes via tmp+mv to avoid torn reads on concurrent hook fires.
+# Session state — single JSON file per PPID with all per-session fields.
+# Fields: updated_at, total_tokens, view_count, nudge_sent,
+#         summaries: {<filepath>: <coagula-summary-text>}
 # ---------------------------------------------------------------------------
 session_dir="$HOME/.copilot/coagula-session-state"
 session_file="${session_dir}/${PPID}.json"
 cumulative_threshold="${COAGULA_CUMULATIVE_THRESHOLD:-8000}"
+view_nudge_after="${COAGULA_VIEW_NUDGE_AFTER:-4}"
+summary_inject="${COAGULA_SUMMARY_INJECT:-on}"
 
-_load_session_total() {
-  [[ -f "$session_file" ]] || { echo 0; return; }
-  local now total
+# Generic read: load a field from state. Returns the default if the file
+# is missing, stale (>1h), or the field is null.
+_state_get() {
+  local jq_path="$1" default="${2:-}"
+  if [[ ! -f "$session_file" ]]; then
+    printf '%s' "$default"
+    return
+  fi
+  local now
   now=$(date +%s)
-  total=$(jq -r --argjson now "$now" '
-    if ((.updated_at // 0) | tonumber) < ($now - 3600)
-    then 0 else (.total_tokens // 0)
-    end' "$session_file" 2>/dev/null) || total=0
-  echo "${total:-0}"
+  local val
+  val=$(jq -r --argjson now "$now" "
+    if ((.updated_at // 0) | tonumber) < (\$now - 3600)
+    then \"\" else (${jq_path} // \"\")
+    end" "$session_file" 2>/dev/null) || val=""
+  if [[ -z "$val" ]]; then
+    printf '%s' "$default"
+  else
+    printf '%s' "$val"
+  fi
 }
 
-_bump_session_total() {
-  local add="$1" now prev total tmp
+# Generic update: apply a jq expression to the (possibly empty) state
+# object and write it atomically. The expression operates on `.` which
+# is the current state object (or {} if fresh / stale).
+_state_update() {
+  local jq_expr="$1" now tmp current
   mkdir -p "$session_dir" 2>/dev/null || true
   now=$(date +%s)
-  prev=$(_load_session_total)
-  total=$(( prev + add ))
-  tmp="${session_file}.tmp.$$"
-  if jq -nc --argjson now "$now" --argjson total "$total" \
-       '{updated_at: $now, total_tokens: $total}' >"$tmp" 2>/dev/null; then
-    mv -f "$tmp" "$session_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  if [[ -f "$session_file" ]]; then
+    current=$(jq --argjson now "$now" \
+      'if ((.updated_at // 0) | tonumber) < ($now - 3600) then {} else . end' \
+      "$session_file" 2>/dev/null) || current="{}"
+  else
+    current="{}"
   fi
-  echo "$total"
+  tmp="${session_file}.tmp.$$"
+  if printf '%s' "$current" \
+       | jq --argjson now "$now" "${jq_expr} | .updated_at = \$now" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$session_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+}
+
+_load_session_total() { _state_get '.total_tokens' '0'; }
+
+_bump_session_total() {
+  local add="$1"
+  _state_update ".total_tokens = ((.total_tokens // 0) + ${add})"
+  _load_session_total
+}
+
+_load_view_count() { _state_get '.view_count' '0'; }
+
+_bump_view_count() {
+  _state_update ".view_count = ((.view_count // 0) + 1)"
+  _load_view_count
+}
+
+_nudge_already_sent() {
+  [[ "$(_state_get '.nudge_sent' '')" == "true" ]]
+}
+
+_mark_nudge_sent() {
+  _state_update '.nudge_sent = true'
+}
+
+# File summary cache: returns cached summary text for a path, or empty.
+_get_cached_summary() {
+  local path="$1"
+  _state_get ".summaries[\"${path}\"]" ''
+}
+
+_set_cached_summary() {
+  local path="$1" summary="$2"
+  # Encode summary as a JSON arg to avoid quoting issues.
+  _state_update "
+    .summaries = (.summaries // {}) | .summaries[\$path] = \$summary
+  " --arg path "$path" --arg summary "$summary"
+  # Note: _state_update signature only takes one arg; inline manually here.
+}
+
+# Direct override of _set_cached_summary since the helper signature is limited.
+_set_cached_summary() {
+  local path="$1" summary="$2" now tmp current
+  mkdir -p "$session_dir" 2>/dev/null || true
+  now=$(date +%s)
+  if [[ -f "$session_file" ]]; then
+    current=$(jq --argjson now "$now" \
+      'if ((.updated_at // 0) | tonumber) < ($now - 3600) then {} else . end' \
+      "$session_file" 2>/dev/null) || current="{}"
+  else
+    current="{}"
+  fi
+  tmp="${session_file}.tmp.$$"
+  if printf '%s' "$current" \
+       | jq --argjson now "$now" --arg path "$path" --arg summary "$summary" '
+         .summaries = (.summaries // {})
+         | .summaries[$path] = $summary
+         | .updated_at = $now' >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$session_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
 }
 
 # Best-effort cleanup of stale session files (~2% of hook fires).
 if (( RANDOM % 50 == 0 )) && [[ -d "$session_dir" ]]; then
   find "$session_dir" -name '*.json' -mmin +60 -delete 2>/dev/null || true
 fi
+
+# ---------------------------------------------------------------------------
+# Defensive file-path extraction for view-like tools.
+# Copilot CLI's view tool's toolArgs schema isn't fully documented; try
+# common field names. Returns empty if none match.
+# ---------------------------------------------------------------------------
+_extract_file_path() {
+  printf '%s' "$input" | jq -r '
+    .toolArgs.path
+    // .toolArgs.filename
+    // .toolArgs.file
+    // .toolArgs.target_file
+    // .toolArgs.target
+    // empty' 2>/dev/null
+}
+
+# Try to compute a coagula summary of the given file path. Returns:
+# - the summary text if compression > 50% saved
+# - empty if file unreadable, not enough savings, or coagula failed
+_try_compute_summary() {
+  local path="$1"
+  [[ -r "$path" ]] || { echo ""; return; }
+  # Bound file size — 1MB cap to avoid runaway costs.
+  local file_size
+  file_size=$(wc -c <"$path" 2>/dev/null | tr -d ' ')
+  if [[ -z "$file_size" ]] || (( file_size > 1048576 )); then
+    echo ""; return
+  fi
+  # Require the file to be at least 1500 chars (~375 tokens) — small files
+  # don't need a summary; just let view return them directly.
+  if (( file_size < 1500 )); then
+    echo ""; return
+  fi
+  # Tight budget so the summary stays cheap to inject.
+  local summary
+  summary=$(coagula --profile passthrough --budget 200 --keep 3 <"$path" 2>/dev/null || true)
+  [[ -z "$summary" ]] && { echo ""; return; }
+
+  # Two-condition dedup test:
+  #   (a) absolute: summary < 500 chars (~125 tokens — small enough to inject)
+  #   (b) relative: summary < 10% of original (rules out budget-stage truncation
+  #       masquerading as dedup — a unique-content file truncated to fit the
+  #       budget would pass condition (a) but fail (b))
+  local summary_size=${#summary}
+  if (( summary_size >= 500 )); then
+    echo ""; return
+  fi
+  if (( summary_size * 10 >= file_size )); then
+    echo ""; return
+  fi
+  printf '%s' "$summary"
+}
 
 # ---------------------------------------------------------------------------
 # Early-exit guards
@@ -129,7 +264,6 @@ if ! command -v coagula >/dev/null 2>&1; then
   echo '{}'; exit 0
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  # Don't log — jq is needed to log anyway.
   echo '{}'; exit 0
 fi
 
@@ -137,12 +271,12 @@ tool_name=$(printf '%s' "$input" | jq -r '.toolName // empty')
 result_type=$(printf '%s' "$input" | jq -r '.toolResult.resultType // empty')
 result_text=$(printf '%s' "$input" | jq -r '.toolResult.textResultForLlm // empty')
 
-# Silent passthrough for non-tool / unsuccessful events — too noisy to log.
+# Silent passthrough for non-tool / unsuccessful events.
 if [[ -z "$tool_name" || -z "$result_text" || "$result_type" != "success" ]]; then
   echo '{}'; exit 0
 fi
 
-# Always-on skip list (internal bookkeeping tools — outputs are tiny + structured).
+# Always-on skip list.
 case "$tool_name" in
   report_intent|sql|todo_*|notification)
     _log "skipped (tool=$tool_name reason=internal-bookkeeping)"
@@ -165,9 +299,55 @@ result_tokens=$(( result_chars / 4 ))
 per_call_threshold=$(_threshold_for_tool "$tool_name")
 
 # Idempotency: don't refunnel coagula's own output.
-if printf '%s' "$result_text" | head -c 200 | grep -q '^### '; then
+if printf '%s' "$result_text" | head -c 200 | grep -q '^### \|^\[coagula'; then
   _log "skipped (tool=$tool_name reason=already-funneled)"
   echo '{}'; exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Pre-compute injection text for view-like tools.
+# Two independent injections, both prepended to the response:
+#   - Multi-view nudge: ONE-TIME per session after N view calls
+#   - File summary: cached per (session, file) when content compresses well
+# ---------------------------------------------------------------------------
+nudge_text=""
+summary_text=""
+
+if _is_view_tool "$tool_name"; then
+  view_count=$(_bump_view_count)
+
+  # A.1: multi-view nudge
+  if (( view_nudge_after > 0 )) && (( view_count >= view_nudge_after )) && ! _nudge_already_sent; then
+    nudge_text="[coagula tip: ${view_count} small reads this session. For bulk pattern analysis, prefer bash like \`grep -A 5 PATTERN file\` or \`cat file | head -N\` — bash outputs auto-funnel via coagula (often 90%+ savings on logs).]"
+    _mark_nudge_sent
+    _log "nudge-injected (tool=$tool_name view_count=$view_count)"
+  fi
+
+  # B.3: cached file summary
+  if [[ "$summary_inject" != "off" ]]; then
+    file_path=$(_extract_file_path)
+    if [[ -n "$file_path" ]]; then
+      cached=$(_get_cached_summary "$file_path")
+      if [[ -n "$cached" ]]; then
+        summary_text="[coagula summary of ${file_path}:
+${cached}
+--- requested slice below ---]"
+        _log "summary-cached (tool=$tool_name file=$file_path)"
+      else
+        # First view of this file — try to compute.
+        computed=$(_try_compute_summary "$file_path")
+        if [[ -n "$computed" ]]; then
+          _set_cached_summary "$file_path" "$computed"
+          summary_text="[coagula summary of ${file_path} (file is dedup-able; consider asking for the pattern rather than line-by-line reads):
+${computed}
+--- requested slice below ---]"
+          _log "summary-computed (tool=$tool_name file=$file_path summary_chars=${#computed})"
+        else
+          _log "summary-skipped (tool=$tool_name file=$file_path reason=not-dedupable-or-too-large)"
+        fi
+      fi
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -181,8 +361,23 @@ if (( result_tokens >= per_call_threshold )); then
 elif (( cumulative_threshold > 0 )) && (( session_total + result_tokens >= cumulative_threshold )); then
   trigger_reason="cumulative(${session_total}+${result_tokens}>=${cumulative_threshold})"
 else
-  # Under both thresholds — track the bytes-sent but don't transform.
+  # Under both thresholds — track bytes-sent. If we have nudge or summary
+  # to inject, return modifiedResult with injection + original content.
   new_total=$(_bump_session_total "$result_tokens")
+  if [[ -n "$nudge_text" || -n "$summary_text" ]]; then
+    injection=""
+    [[ -n "$nudge_text" ]] && injection="${nudge_text}"
+    [[ -n "$summary_text" ]] && injection="${injection}${injection:+
+
+}${summary_text}"
+    final="${injection}
+
+${result_text}"
+    _log "injection-only (tool=$tool_name nudge=$([[ -n "$nudge_text" ]] && echo 1 || echo 0) summary=$([[ -n "$summary_text" ]] && echo 1 || echo 0) extra_chars=$((${#final} - result_chars)))"
+    jq -nc --arg text "$final" \
+      '{modifiedResult: {resultType: "success", textResultForLlm: $text}}'
+    exit 0
+  fi
   _log "under-threshold (tool=$tool_name tokens=$result_tokens per_call=$per_call_threshold cumulative=${new_total}/${cumulative_threshold})"
   echo '{}'; exit 0
 fi
@@ -222,7 +417,7 @@ else
 fi
 
 if [[ -z "$cleaned" ]]; then
-  _log "funnel-empty (tool=$tool_name) — falling through unchanged"
+  _log "funnel-empty (tool=$tool_name) — passing through unchanged"
   echo '{}'; exit 0
 fi
 
@@ -235,8 +430,22 @@ fi
 cleaned_tokens=$(( cleaned_chars / 4 ))
 new_total=$(_bump_session_total "$cleaned_tokens")
 
-final="[coagula: ${result_tokens} → ${cleaned_tokens} tok | tool=${tool_name} profile=${profile}]
+# Build final response, prepending any nudge/summary injections.
+injection_combined=""
+[[ -n "$nudge_text" ]] && injection_combined="${nudge_text}"
+[[ -n "$summary_text" ]] && injection_combined="${injection_combined}${injection_combined:+
+
+}${summary_text}"
+
+if [[ -n "$injection_combined" ]]; then
+  final="${injection_combined}
+
+[coagula: ${result_tokens} → ${cleaned_tokens} tok | tool=${tool_name} profile=${profile}]
 ${cleaned}"
+else
+  final="[coagula: ${result_tokens} → ${cleaned_tokens} tok | tool=${tool_name} profile=${profile}]
+${cleaned}"
+fi
 
 _log "fired (tool=$tool_name profile=$profile in=${result_tokens} out=${cleaned_tokens} reason=${trigger_reason} cumulative=${new_total})"
 

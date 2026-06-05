@@ -212,10 +212,16 @@ def test_cumulative_triggers_after_session_total_exceeds_threshold(tmp_path):
 
 @needs_coagula
 def test_cumulative_disabled_when_threshold_is_zero(tmp_path):
-    """Setting COAGULA_CUMULATIVE_THRESHOLD=0 disables the feature."""
+    """Setting COAGULA_CUMULATIVE_THRESHOLD=0 disables cumulative funneling.
+
+    Note: v0.7+ may still emit a modifiedResult from the multi-view nudge
+    path. Disable both via COAGULA_VIEW_NUDGE_AFTER=0 for a pure
+    no-modification test."""
     env = {
         "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
         "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_SUMMARY_INJECT": "off",
         "HOME": str(tmp_path),
     }
     chunk_text = _dedup_able(11)  # ~300 tokens (under view's 500)
@@ -226,7 +232,7 @@ def test_cumulative_disabled_when_threshold_is_zero(tmp_path):
         out, _ = _run_hook(_payload("view", chunk_text), env)
         if "modifiedResult" in out:
             fired_count += 1
-    assert fired_count == 0, "cumulative=0 should never funnel sub-threshold calls"
+    assert fired_count == 0, "all v0.7 injection paths disabled, none should fire"
 
 
 # ---------------------------------------------------------------------------
@@ -322,3 +328,196 @@ def test_cumulative_triggered_call_preserves_fatal_signal(tmp_path):
         assert "FATAL" in funneled_text, (
             f"FATAL signal lost after cumulative-triggered funnel: {funneled_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0 — multi-view nudge (A.1)
+# ---------------------------------------------------------------------------
+
+
+def _view_payload(text: str, path: str = "tests/fixtures/crashloop.log") -> dict:
+    """View tool payload with a `path` field (defensive — actual Copilot CLI
+    field name may differ; the hook tries multiple)."""
+    return {
+        "toolName": "view",
+        "toolArgs": {"path": path, "view_range": [1, 1]},
+        "toolResult": {
+            "resultType": "success",
+            "textResultForLlm": text,
+            "exitCode": 0,
+        },
+    }
+
+
+@needs_coagula
+def test_view_nudge_fires_after_threshold_view_calls(tmp_path):
+    """After COAGULA_VIEW_NUDGE_AFTER view calls, the next response gets a
+    one-time nudge prepended suggesting bash alternatives that funnel."""
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "3",
+        "COAGULA_SUMMARY_INJECT": "off",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    tiny = "INFO line 1 some text"  # well under threshold
+
+    # First 2 calls: no nudge, just passthrough.
+    for _ in range(2):
+        out, _ = _run_hook(_view_payload(tiny, "/tmp/no-such-file"), env)
+        assert out == {}
+
+    # 3rd call: nudge fires.
+    out, log = _run_hook(_view_payload(tiny, "/tmp/no-such-file"), env)
+    assert "modifiedResult" in out, f"3rd view should trigger nudge; log:\n{log}"
+    text = out["modifiedResult"]["textResultForLlm"]
+    assert "[coagula tip:" in text
+    assert "grep" in text or "cat" in text  # mentions bash alternatives
+    assert tiny in text  # original content preserved
+    assert "nudge-injected" in log
+
+
+@needs_coagula
+def test_view_nudge_fires_only_once_per_session(tmp_path):
+    """The nudge is meant to be a hint, not a repeated nag. Once sent,
+    subsequent view calls don't re-inject it."""
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "1",
+        "COAGULA_SUMMARY_INJECT": "off",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    tiny = "x"  # 1 char — nudge fires immediately
+
+    # Call 1: nudge fires.
+    out1, _ = _run_hook(_view_payload(tiny, "/tmp/no-such-file"), env)
+    assert "[coagula tip:" in out1.get("modifiedResult", {}).get("textResultForLlm", "")
+
+    # Calls 2-5: nudge does NOT fire again.
+    for i in range(2, 6):
+        out, _ = _run_hook(_view_payload(tiny, "/tmp/no-such-file"), env)
+        assert out == {}, f"call {i} should not re-inject nudge"
+
+
+@needs_coagula
+def test_view_nudge_disabled_when_after_is_zero(tmp_path):
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_SUMMARY_INJECT": "off",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    for _ in range(20):
+        out, _ = _run_hook(_view_payload("x", "/tmp/no-such-file"), env)
+        assert out == {}, "nudge_after=0 should disable nudge"
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0 — conditional file-summary injection (B.3)
+# ---------------------------------------------------------------------------
+
+
+@needs_coagula
+def test_summary_injected_on_first_view_when_file_dedupable(tmp_path):
+    """When the viewed file compresses well (e.g., crashloop log), the first
+    view call gets a coagula summary prepended, helping the model decide
+    whether to keep paginating."""
+    # Create a dedup-able fixture
+    fixture = tmp_path / "fake-crashloop.log"
+    fixture.write_text(_dedup_able(500))  # ~13k tokens, dedups massively
+
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    out, log = _run_hook(_view_payload("one line of result", str(fixture)), env)
+    assert "modifiedResult" in out, f"summary should inject; log:\n{log}"
+    text = out["modifiedResult"]["textResultForLlm"]
+    assert "[coagula summary of" in text
+    assert "one line of result" in text  # original content preserved
+    assert "summary-computed" in log
+
+
+@needs_coagula
+def test_summary_not_injected_when_file_not_dedupable(tmp_path):
+    """When the viewed file is NOT compressible (e.g., random code), no
+    summary is injected so we don't waste tokens."""
+    # Heterogeneous content with no template repetition
+    fixture = tmp_path / "unique-content.txt"
+    fixture.write_text("\n".join(f"unique line {i} with totally different content {i*i}" for i in range(200)))
+
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    out, log = _run_hook(_view_payload("one line", str(fixture)), env)
+    assert out == {}, "non-dedupable file should not inject summary"
+    assert "summary-skipped" in log
+
+
+@needs_coagula
+def test_summary_cached_across_view_calls_on_same_file(tmp_path):
+    """Second view on same file uses cached summary; doesn't re-compute."""
+    fixture = tmp_path / "fake-crashloop.log"
+    fixture.write_text(_dedup_able(500))
+
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    # First call computes
+    _run_hook(_view_payload("line one", str(fixture)), env)
+    # Second call should hit the cache
+    out, log = _run_hook(_view_payload("line two", str(fixture)), env)
+    assert "modifiedResult" in out
+    log_lines = log.splitlines()
+    assert any("summary-cached" in l for l in log_lines), (
+        "second call should hit cache, not recompute"
+    )
+    assert sum(1 for l in log_lines if "summary-computed" in l) == 1, (
+        "summary should only be computed once per file per session"
+    )
+
+
+@needs_coagula
+def test_summary_disabled_via_env(tmp_path):
+    fixture = tmp_path / "fake.log"
+    fixture.write_text(_dedup_able(500))
+
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_SUMMARY_INJECT": "off",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    out, _ = _run_hook(_view_payload("line", str(fixture)), env)
+    assert out == {}, "summary-injection=off should disable feature"
+
+
+@needs_coagula
+def test_summary_skipped_when_file_path_undetectable(tmp_path):
+    """If toolArgs has no recognized path field, summary path is skipped
+    silently (no error)."""
+    env = {
+        "COAGULA_DEBUG_LOG": str(tmp_path / "debug.log"),
+        "COAGULA_VIEW_NUDGE_AFTER": "0",
+        "COAGULA_CUMULATIVE_THRESHOLD": "0",
+        "HOME": str(tmp_path),
+    }
+    # Payload with no recognizable path field
+    payload = {
+        "toolName": "view",
+        "toolArgs": {"unknown_field": "/tmp/x"},
+        "toolResult": {"resultType": "success", "textResultForLlm": "x", "exitCode": 0},
+    }
+    out, _ = _run_hook(payload, env)
+    assert out == {}, "no path → no summary attempt → passthrough"
